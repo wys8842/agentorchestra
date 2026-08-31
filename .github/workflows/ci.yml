@@ -27,7 +27,7 @@ jobs:
           pip install ".[dev]"
 
       - name: Lint with ruff
-        run: ruff check symphony/
+        run: ruff check agentorchestra/
 
       - name: Run tests with pytest
         run: pytest tests/ -v

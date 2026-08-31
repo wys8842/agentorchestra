@@ -2,13 +2,13 @@
 import json
 import logging
 
-from symphony.core.logging import JsonFormatter, get_logger, setup_logging
+from agentorchestra.core.logging import JsonFormatter, get_logger, setup_logging
 
 
 class TestLogging:
     def test_get_logger(self):
         logger = get_logger("core.llm")
-        assert logger.name == "symphony.core.llm"
+        assert logger.name == "agentorchestra.core.llm"
 
     def test_setup_logging_no_error(self):
         # 配置不应抛错

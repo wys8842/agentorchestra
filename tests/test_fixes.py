@@ -2,7 +2,7 @@
 
 import pytest
 
-from symphony.ontology import (
+from agentorchestra.ontology import (
     ActionType,
     ConditionNode,
     GraphStore,
@@ -15,8 +15,8 @@ from symphony.ontology import (
     TransactionManager,
     Workflow,
 )
-from symphony.tools.base import ToolParameter
-from symphony.tools.registry import ToolRegistry
+from agentorchestra.tools.base import ToolParameter
+from agentorchestra.tools.registry import ToolRegistry
 
 
 def make_customer() -> ObjectType:
@@ -184,7 +184,7 @@ class TestSchedulerOnceEnabled:
     def test_disabled_once_not_executed(self):
         import time
 
-        from symphony.ontology.process.scheduler import Scheduler
+        from agentorchestra.ontology.process.scheduler import Scheduler
         sched = Scheduler()
         calls = []
         sched.add_once("t1", lambda p: calls.append(1), delay_seconds=0.1)
@@ -199,8 +199,8 @@ class TestToolFilterFunctions:
     """M: _apply_tool_filter 处理函数工具"""
 
     def test_filter_disables_function_tools(self):
-        from symphony.core.agent import Agent
-        from symphony.tools.tool_filter import CustomFilter
+        from agentorchestra.core.agent import Agent
+        from agentorchestra.tools.tool_filter import CustomFilter
 
         registry = ToolRegistry()
         registry.register_function(lambda x: x, name="secret_func")

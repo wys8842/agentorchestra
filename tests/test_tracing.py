@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from symphony.core.tracing import (
+from agentorchestra.core.tracing import (
     JsonlExporter,
     MemoryExporter,
     Tracer,

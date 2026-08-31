@@ -12,7 +12,7 @@
 - 延迟导入 mcp 依赖（未安装时不影响框架其他功能）
 
 使用示例：
-    >>> from symphony.tools.builtin.mcp_tool import MCPServerManager
+    >>> from agentorchestra.tools.builtin.mcp_tool import MCPServerManager
     >>> manager = MCPServerManager(config_file="mcp.json")
     >>> tools = manager.connect_all()
     >>> for tool in tools:

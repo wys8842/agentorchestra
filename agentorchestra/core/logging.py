@@ -55,7 +55,7 @@ def setup_logging(
         max_bytes: 单个日志文件最大字节数
         backup_count: 保留的滚动文件数
     """
-    root = logging.getLogger("symphony")
+    root = logging.getLogger("agentorchestra")
     root.setLevel(level.upper())
 
     # 避免重复添加 handler
@@ -80,7 +80,7 @@ def setup_logging(
 
 
 def get_logger(name: str) -> logging.Logger:
-    """获取 symphony 命名空间下的 logger
+    """获取 agentorchestra 命名空间下的 logger
 
     Args:
         name: 模块名（如 "core.llm"）
@@ -88,7 +88,7 @@ def get_logger(name: str) -> logging.Logger:
     Returns:
         Logger 实例
     """
-    return logging.getLogger(f"symphony.{name}")
+    return logging.getLogger(f"agentorchestra.{name}")
 
 
 def log_event(logger: logging.Logger, event: str, **fields) -> None:

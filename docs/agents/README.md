@@ -16,7 +16,7 @@
 ### 1. SimpleAgent
 
 ```python
-from symphony.agents.simple_agent import SimpleAgent
+from agentorchestra.agents.simple_agent import SimpleAgent
 
 agent = SimpleAgent(
     name="assistant",
@@ -30,7 +30,7 @@ result = agent.run("你好")
 ### 2. ReActAgent（最完整的工具型 Agent）
 
 ```python
-from symphony.agents.react_agent import ReActAgent
+from agentorchestra.agents.react_agent import ReActAgent
 
 agent = ReActAgent(
     name="react",
@@ -54,7 +54,7 @@ Thought(记录推理) → Action(调用工具) → 观察结果 → ... → Fini
 ### 3. ReflectionAgent
 
 ```python
-from symphony.agents.reflection_agent import ReflectionAgent
+from agentorchestra.agents.reflection_agent import ReflectionAgent
 
 agent = ReflectionAgent(
     name="reflector",
@@ -69,7 +69,7 @@ result = agent.run("写一个高质量方案")
 ### 4. PlanSolveAgent
 
 ```python
-from symphony.agents.plan_solve_agent import PlanSolveAgent
+from agentorchestra.agents.plan_solve_agent import PlanSolveAgent
 
 agent = PlanSolveAgent(name="planner", llm=llm)
 result = agent.run("实现一个推荐系统")
@@ -80,7 +80,7 @@ result = agent.run("实现一个推荐系统")
 ## 工厂创建
 
 ```python
-from symphony.agents.factory import create_agent, default_subagent_factory
+from agentorchestra.agents.factory import create_agent, default_subagent_factory
 
 agent = create_agent(
     agent_type="react",      # react/reflection/plan/simple

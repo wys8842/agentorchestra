@@ -20,17 +20,17 @@ Workflow/Scheduler/Transaction 负责执行编排。
 ## 安装
 
 ```bash
-pip install symphony            # 核心
-pip install "symphony[all]"     # 全部可选依赖（MCP/Neo4j/Gemini 等）
+pip install agentorchestra            # 核心
+pip install "agentorchestra[all]"     # 全部可选依赖（MCP/Neo4j/Gemini 等）
 ```
 
 ## 快速开始
 
 ```python
-from symphony.core.config import Config
-from symphony.core.llm import SymphonyLLM
-from symphony.agents.react_agent import ReActAgent
-from symphony.tools.registry import ToolRegistry
+from agentorchestra.core.config import Config
+from agentorchestra.core.llm import SymphonyLLM
+from agentorchestra.agents.react_agent import ReActAgent
+from agentorchestra.tools.registry import ToolRegistry
 
 llm = SymphonyLLM(provider="openai", model="gpt-4o", api_key="sk-xxx")
 registry = ToolRegistry()
@@ -63,7 +63,7 @@ result = agent.run("帮我分析这个项目")
 ## 开发
 
 ```bash
-pip install "symphony[dev]"
+pip install "agentorchestra[dev]"
 pytest              # 运行测试
 ruff check .        # 代码检查
 ```

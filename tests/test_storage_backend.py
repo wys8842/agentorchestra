@@ -1,13 +1,13 @@
 """ontology/storage 存储后端测试"""
 
 
-from symphony.ontology import (
+from agentorchestra.ontology import (
     GraphStore,
     ObjectStore,
     ObjectType,
     SQLiteBackend,
 )
-from symphony.tools.base import ToolParameter
+from agentorchestra.tools.base import ToolParameter
 
 
 def make_customer() -> ObjectType:

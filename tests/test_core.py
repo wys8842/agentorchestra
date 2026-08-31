@@ -1,13 +1,13 @@
 """core 核心层测试"""
 
-from symphony.core.config import Config
-from symphony.core.exceptions import (
+from agentorchestra.core.config import Config
+from agentorchestra.core.exceptions import (
     ConfigException,
     LLMException,
     OntologyException,
     SymphonyException,
 )
-from symphony.core.message import Message
+from agentorchestra.core.message import Message
 
 
 class TestMessage:

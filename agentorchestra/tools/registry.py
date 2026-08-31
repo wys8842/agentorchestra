@@ -9,7 +9,7 @@ from .circuit_breaker import CircuitBreaker
 from .errors import ToolErrorCode
 from .response import ToolResponse
 
-logger = logging.getLogger("symphony.tools.registry")
+logger = logging.getLogger("agentorchestra.tools.registry")
 
 
 class ToolRegistry:
@@ -148,7 +148,7 @@ class ToolRegistry:
         # 追踪埋点（局部变量，避免实例属性跨调用/多线程污染）
         trace_span = None
         try:
-            from symphony.core.tracing import get_tracer
+            from agentorchestra.core.tracing import get_tracer
             trace_span = get_tracer().start_span(f"tool.{name}", {"tool": name})
         except Exception:
             trace_span = None
@@ -168,7 +168,7 @@ class ToolRegistry:
             try:
                 if trace_span is not None:
                     trace_span.set_error()
-                    from symphony.core.tracing import get_tracer
+                    from agentorchestra.core.tracing import get_tracer
                     get_tracer().end_span(trace_span)
             except Exception:
                 pass
@@ -241,7 +241,7 @@ class ToolRegistry:
 
         # 观测埋点：工具指标 + 追踪结束
         try:
-            from symphony.core.metrics import get_metrics
+            from agentorchestra.core.metrics import get_metrics
             metrics = get_metrics()
             is_error = getattr(response, "status", None) is not None and \
                 getattr(response.status, "value", "") == "error"
@@ -257,7 +257,7 @@ class ToolRegistry:
                 if is_error:
                     trace_span.set_error()
                 trace_span.set_attribute("status", "error" if is_error else "ok")
-                from symphony.core.tracing import get_tracer
+                from agentorchestra.core.tracing import get_tracer
                 get_tracer().end_span(trace_span)
         except Exception:
             pass

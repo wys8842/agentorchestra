@@ -3,8 +3,8 @@ import time
 
 import pytest
 
-from symphony.core.exceptions import SymphonyException
-from symphony.core.retry import RetryManager, retry_with_backoff
+from agentorchestra.core.exceptions import SymphonyException
+from agentorchestra.core.retry import RetryManager, retry_with_backoff
 
 
 class TestRetryWithBackoff:

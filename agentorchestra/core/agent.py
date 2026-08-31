@@ -46,8 +46,8 @@ class Agent(ABC):
         self.tool_registry = tool_registry
 
         # 新增：上下文工程组件
-        from symphony.context.history import HistoryManager
-        from symphony.context.truncator import ObservationTruncator
+        from agentorchestra.context.history import HistoryManager
+        from agentorchestra.context.truncator import ObservationTruncator
 
         self.history_manager = HistoryManager(
             min_retain_rounds=self.config.min_retain_rounds,
@@ -67,7 +67,7 @@ class Agent(ABC):
         self._history_token_count = 0  # 缓存历史 Token 数
 
         # 新增：可观测性组件
-        from symphony.observability import TraceLogger
+        from agentorchestra.observability import TraceLogger
 
         self.trace_logger: Optional[TraceLogger] = None
         if self.config.trace_enabled:
@@ -89,7 +89,7 @@ class Agent(ABC):
         # 新增：Skills 知识外化组件
         from pathlib import Path
 
-        from symphony.skills import SkillLoader
+        from agentorchestra.skills import SkillLoader
 
         self.skill_loader: Optional[SkillLoader] = None
         if self.config.skills_enabled:
@@ -98,7 +98,7 @@ class Agent(ABC):
 
             # 自动注册 SkillTool
             if self.config.skills_auto_register and self.tool_registry:
-                from symphony.tools.builtin.skill_tool import SkillTool
+                from agentorchestra.tools.builtin.skill_tool import SkillTool
                 skill_tool = SkillTool(skill_loader=self.skill_loader)
                 self.tool_registry.register_tool(skill_tool)
 
@@ -106,7 +106,7 @@ class Agent(ABC):
         self.mcp_manager: Optional[Any] = None
         if self.config.mcp_enabled and self.tool_registry:
             try:
-                from symphony.tools.builtin.mcp_tool import MCPServerManager
+                from agentorchestra.tools.builtin.mcp_tool import MCPServerManager
                 self.mcp_manager = MCPServerManager(config_file=self.config.mcp_config_file)
                 for tool in self.mcp_manager.connect_all():
                     self.tool_registry.register_tool(tool)
@@ -119,8 +119,8 @@ class Agent(ABC):
         self.ontology_engine: Optional[Any] = None
         if self.config.ontology_engine_enabled and self.tool_registry:
             try:
-                from symphony.ontology.engine import OntologyEngine
-                from symphony.ontology.governance import SecurityContext
+                from agentorchestra.ontology.engine import OntologyEngine
+                from agentorchestra.ontology.governance import SecurityContext
 
                 if self.config.ontology_engine_module:
                     # 用户自定义装配模块：提供 build_engine() -> OntologyEngine

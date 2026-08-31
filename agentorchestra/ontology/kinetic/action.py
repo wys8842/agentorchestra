@@ -90,8 +90,8 @@ class ActionType:
 
         # 观测埋点：动作指标 + 追踪
         try:
-            from symphony.core.metrics import get_metrics
-            from symphony.core.tracing import get_tracer
+            from agentorchestra.core.metrics import get_metrics
+            from agentorchestra.core.tracing import get_tracer
             get_metrics().record_action_execution(self.api_name)
             with get_tracer().span("action.execute", {"action": self.api_name}):
                 pass

@@ -1,10 +1,10 @@
 """context 上下文工程测试"""
 
-from symphony.context.builder import ContextBuilder, ContextConfig, ContextPacket
-from symphony.context.history import HistoryManager
-from symphony.context.token_counter import TokenCounter
-from symphony.context.truncator import ObservationTruncator
-from symphony.core.message import Message
+from agentorchestra.context.builder import ContextBuilder, ContextConfig, ContextPacket
+from agentorchestra.context.history import HistoryManager
+from agentorchestra.context.token_counter import TokenCounter
+from agentorchestra.context.truncator import ObservationTruncator
+from agentorchestra.core.message import Message
 
 
 class TestHistoryManager:

@@ -33,7 +33,7 @@
 统一 LLM 接口，屏蔽多提供商差异：
 
 ```python
-from symphony.core.llm import SymphonyLLM
+from agentorchestra.core.llm import SymphonyLLM
 
 llm = SymphonyLLM(provider="openai", model="gpt-4o", api_key="sk-xxx")
 response = llm.invoke([{"role": "user", "content": "你好"}])
@@ -78,7 +78,7 @@ class Agent(ABC):
 ### 3. 生命周期事件
 
 ```python
-from symphony.core.lifecycle import EventType, AgentEvent
+from agentorchestra.core.lifecycle import EventType, AgentEvent
 
 async def on_finish(event: AgentEvent):
     print(f"Agent 完成: {event.data['result']}")
@@ -106,7 +106,7 @@ agent.load_session("session-01")   # 恢复
 ## 配置
 
 ```python
-from symphony.core.config import Config
+from agentorchestra.core.config import Config
 
 config = Config(
     default_model="gpt-4o",
@@ -121,8 +121,8 @@ config = Config(
 ### 配置加载与热更新
 
 ```python
-from symphony.core.config import Config
-from symphony.core.hot_config import ConfigWatch
+from agentorchestra.core.config import Config
+from agentorchestra.core.hot_config import ConfigWatch
 
 # 从环境变量/JSON 加载（优先级：显式 > 文件 > env）
 config = Config.from_env("SYMPHONY_")
@@ -137,9 +137,9 @@ watch.start()
 ### 结构化日志
 
 ```python
-from symphony.core.logging import setup_logging, get_logger
+from agentorchestra.core.logging import setup_logging, get_logger
 
-setup_logging(level="INFO", json_format=True, log_file="logs/symphony.log")
+setup_logging(level="INFO", json_format=True, log_file="logs/agentorchestra.log")
 logger = get_logger("core.llm")
 logger.info("事件", extra={"session_id": "s-123", "step": 1})  # JSON 输出
 ```
@@ -147,8 +147,8 @@ logger.info("事件", extra={"session_id": "s-123", "step": 1})  # JSON 输出
 ### 指标与追踪
 
 ```python
-from symphony.core.metrics import get_metrics
-from symphony.core.tracing import get_tracer, JsonlExporter
+from agentorchestra.core.metrics import get_metrics
+from agentorchestra.core.tracing import get_tracer, JsonlExporter
 
 metrics = get_metrics()
 metrics.record_llm_call("gpt-4o", "openai", tokens=100, latency_ms=500)
@@ -161,14 +161,14 @@ with tracer.span("llm.invoke", {"model": "gpt-4o"}):
 ### 限流与健康检查
 
 ```python
-from symphony.core.ratelimit import RateLimiter
-from symphony.core.health import HealthCheck
-from symphony.core.monitor import MonitorServer
+from agentorchestra.core.ratelimit import RateLimiter
+from agentorchestra.core.health import HealthCheck
+from agentorchestra.core.monitor import MonitorServer
 
 limiter = RateLimiter(default_limit=100, window_seconds=60)
 limiter.try_acquire("user_a")  # 按 key 限流
 
-hc = HealthCheck("symphony")
+hc = HealthCheck("agentorchestra")
 hc.register_basic()
 
 # 监控服务：/metrics /health /traces

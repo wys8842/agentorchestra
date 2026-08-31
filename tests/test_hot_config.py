@@ -1,8 +1,8 @@
 """core/hot_config 配置热更新测试"""
 import json
 
-from symphony.core.config import Config
-from symphony.core.hot_config import ConfigWatch
+from agentorchestra.core.config import Config
+from agentorchestra.core.hot_config import ConfigWatch
 
 
 class TestConfigWatch:

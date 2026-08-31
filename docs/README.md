@@ -45,10 +45,10 @@
 ## 快速开始
 
 ```python
-from symphony.core.config import Config
-from symphony.core.llm import SymphonyLLM
-from symphony.agents.react_agent import ReActAgent
-from symphony.tools.registry import ToolRegistry
+from agentorchestra.core.config import Config
+from agentorchestra.core.llm import SymphonyLLM
+from agentorchestra.agents.react_agent import ReActAgent
+from agentorchestra.tools.registry import ToolRegistry
 
 llm = SymphonyLLM(provider="openai", model="gpt-4o", api_key="sk-xxx")
 registry = ToolRegistry()

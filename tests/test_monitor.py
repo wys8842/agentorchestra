@@ -2,9 +2,9 @@
 import json
 import urllib.request
 
-from symphony.core.health import HealthCheck
-from symphony.core.monitor import MonitorServer
-from symphony.core.tracing import MemoryExporter, Tracer
+from agentorchestra.core.health import HealthCheck
+from agentorchestra.core.monitor import MonitorServer
+from agentorchestra.core.tracing import MemoryExporter, Tracer
 
 
 class TestHealthCheck:
@@ -37,7 +37,7 @@ class TestHealthCheck:
 class TestMonitorServer:
     def _start_server(self):
         tracer = Tracer(MemoryExporter())
-        hc = HealthCheck("symphony")
+        hc = HealthCheck("agentorchestra")
         hc.register_basic()
         with tracer.span("test_op"):
             pass

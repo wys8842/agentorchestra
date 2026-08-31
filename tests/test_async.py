@@ -1,9 +1,9 @@
 """Agent 异步路径测试（mock LLM）"""
 
 
-from symphony.core.config import Config
-from symphony.core.lifecycle import AgentEvent, EventType
-from symphony.core.message import Message
+from agentorchestra.core.config import Config
+from agentorchestra.core.lifecycle import AgentEvent, EventType
+from agentorchestra.core.message import Message
 
 
 class MockLLM:
@@ -46,7 +46,7 @@ class SimpleMessage:
 
 class TestSimpleAgentAsync:
     def _make_agent(self):
-        from symphony.agents.simple_agent import SimpleAgent
+        from agentorchestra.agents.simple_agent import SimpleAgent
         agent = SimpleAgent(
             name="async-agent",
             llm=MockLLM(),
@@ -86,7 +86,7 @@ class TestSimpleAgentAsync:
 
 class TestAgentMessageHistory:
     def test_add_message_updates_token_count(self):
-        from symphony.agents.simple_agent import SimpleAgent
+        from agentorchestra.agents.simple_agent import SimpleAgent
         agent = SimpleAgent(
             name="h-agent",
             llm=MockLLM(),
@@ -99,7 +99,7 @@ class TestAgentMessageHistory:
         assert len(agent.get_history()) == 1
 
     def test_clear_history(self):
-        from symphony.agents.simple_agent import SimpleAgent
+        from agentorchestra.agents.simple_agent import SimpleAgent
         agent = SimpleAgent(
             name="c-agent",
             llm=MockLLM(),

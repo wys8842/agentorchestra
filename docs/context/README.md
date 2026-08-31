@@ -14,7 +14,7 @@
 ## 1. HistoryManager — 历史管理
 
 ```python
-from symphony.context.history import HistoryManager
+from agentorchestra.context.history import HistoryManager
 
 manager = HistoryManager(min_retain_rounds=10)
 manager.append(Message("你好", "user"))
@@ -29,7 +29,7 @@ manager.compress("前几轮的摘要")       # 压缩旧轮次，保留最近 N 
 ## 2. TokenCounter — Token 计量
 
 ```python
-from symphony.context.token_counter import TokenCounter
+from agentorchestra.context.token_counter import TokenCounter
 
 counter = TokenCounter(model="gpt-4")
 tokens = counter.count_message(msg)      # 单条 + 缓存
@@ -54,7 +54,7 @@ HistoryManager.compress() → [summary消息] + 最近 min_retain_rounds 轮
 ## 4. ContextBuilder — GSSC 流水线
 
 ```python
-from symphony.context.builder import ContextBuilder, ContextConfig
+from agentorchestra.context.builder import ContextBuilder, ContextConfig
 
 builder = ContextBuilder(
     config=ContextConfig(max_tokens=8000),
@@ -76,7 +76,7 @@ context = builder.build(
 ## 5. ObservationTruncator — 工具输出截断
 
 ```python
-from symphony.context.truncator import ObservationTruncator
+from agentorchestra.context.truncator import ObservationTruncator
 
 truncator = ObservationTruncator(max_lines=2000, truncate_direction="head")
 result = truncator.truncate(tool_name="Read", output=long_text)

@@ -11,15 +11,15 @@
 import sys
 import time
 import threading
-sys.path.insert(0, 'D:/proj/symphony')
+sys.path.insert(0, 'D:/proj/agentorchestra')
 
-from symphony.ontology import (
+from agentorchestra.ontology import (
     ObjectStore, ObjectType, GraphStore, SQLiteBackend, MemoryBackend,
     OntologyEngine, SecurityContext, Workflow, StepNode,
 )
-from symphony.tools.base import Tool, ToolParameter
-from symphony.tools.response import ToolResponse
-from symphony.tools.registry import ToolRegistry
+from agentorchestra.tools.base import Tool, ToolParameter
+from agentorchestra.tools.response import ToolResponse
+from agentorchestra.tools.registry import ToolRegistry
 
 
 def section(t):
@@ -133,7 +133,7 @@ def stress_workflow():
         oid = params.get("order_id") or "o1"
         return {"order_id": oid, "status": params.get("status", "x")}
 
-    engine.register_action(__import__('symphony.ontology', fromlist=['ActionType']).ActionType(
+    engine.register_action(__import__('agentorchestra.ontology', fromlist=['ActionType']).ActionType(
         "set_status", parameters=[
             ToolParameter(name="order_id", type="string", description="id", required=False),
             ToolParameter(name="status", type="string", description="s", required=False)],
@@ -163,7 +163,7 @@ def stress_workflow():
 # ==================== 4. Scheduler 高频任务 ====================
 section("④ Scheduler 高频任务")
 def stress_scheduler():
-    from symphony.ontology.process.scheduler import Scheduler
+    from agentorchestra.ontology.process.scheduler import Scheduler
     sched = Scheduler(tick_seconds=0.05)
     calls = []
     sched.add_interval("fast", lambda p: calls.append(time.monotonic()),

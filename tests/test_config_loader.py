@@ -1,8 +1,8 @@
 """core/config_loader 配置加载测试"""
 import json
 
-from symphony.core.config import Config
-from symphony.core.config_loader import ConfigLoader
+from agentorchestra.core.config import Config
+from agentorchestra.core.config_loader import ConfigLoader
 
 
 class TestConfigLoader:

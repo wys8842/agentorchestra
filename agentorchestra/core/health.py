@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, List
 class HealthCheck:
     """健康检查器"""
 
-    def __init__(self, name: str = "symphony"):
+    def __init__(self, name: str = "agentorchestra"):
         """初始化健康检查
 
         Args:

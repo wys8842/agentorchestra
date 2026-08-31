@@ -1,7 +1,7 @@
 """core/ratelimit 限流测试"""
 import time
 
-from symphony.core.ratelimit import RateLimiter, SlidingWindow, TokenBucket
+from agentorchestra.core.ratelimit import RateLimiter, SlidingWindow, TokenBucket
 
 
 class TestTokenBucket:

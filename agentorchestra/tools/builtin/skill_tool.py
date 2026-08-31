@@ -9,8 +9,8 @@
 - 参数替换：支持 $ARGUMENTS 占位符
 
 使用示例：
-    >>> from symphony.skills import SkillLoader
-    >>> from symphony.tools.builtin.skill_tool import SkillTool
+    >>> from agentorchestra.skills import SkillLoader
+    >>> from agentorchestra.tools.builtin.skill_tool import SkillTool
     >>> loader = SkillLoader(skills_dir=Path("skills"))
     >>> tool = SkillTool(skill_loader=loader)
     >>> # Agent 调用

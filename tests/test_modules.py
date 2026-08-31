@@ -1,7 +1,7 @@
 """core/session_store + 内置工具 + query_engine 测试"""
 
-from symphony.core.message import Message
-from symphony.core.session_store import SessionStore
+from agentorchestra.core.message import Message
+from agentorchestra.core.session_store import SessionStore
 
 
 class TestSessionStore:
@@ -59,7 +59,7 @@ class TestSessionStore:
 
 class TestCalculator:
     def test_calculate(self):
-        from symphony.tools.builtin.calculator import CalculatorTool, calculate
+        from agentorchestra.tools.builtin.calculator import CalculatorTool, calculate
         resp = calculate("1+1")
         assert resp.status.value == "success"
         assert resp.data["result"] == 2
@@ -76,8 +76,8 @@ class TestSkillTool:
     def test_skill_not_found(self, tmp_path):
         from pathlib import Path
 
-        from symphony.skills.loader import SkillLoader
-        from symphony.tools.builtin.skill_tool import SkillTool
+        from agentorchestra.skills.loader import SkillLoader
+        from agentorchestra.tools.builtin.skill_tool import SkillTool
 
         loader = SkillLoader(skills_dir=Path(str(tmp_path / "skills")))
         tool = SkillTool(skill_loader=loader)
@@ -89,7 +89,7 @@ class TestSkillTool:
 
 class TestTodoWrite:
     def test_todowrite_basic(self, tmp_path):
-        from symphony.tools.builtin.todowrite_tool import TodoWriteTool
+        from agentorchestra.tools.builtin.todowrite_tool import TodoWriteTool
         tool = TodoWriteTool(project_root=str(tmp_path), persistence_dir=str(tmp_path / "todos"))
         params = tool.get_parameters()
         names = [p.name for p in params]
@@ -102,7 +102,7 @@ class TestTodoWrite:
 
 class TestQueryEngine:
     def test_interface_query(self):
-        from symphony.ontology import (
+        from agentorchestra.ontology import (
             GraphStore,
             Interface,
             ObjectStore,
@@ -110,7 +110,7 @@ class TestQueryEngine:
             OntologyEngine,
             SecurityContext,
         )
-        from symphony.tools.base import ToolParameter
+        from agentorchestra.tools.base import ToolParameter
 
         store = ObjectStore(graph=GraphStore())
         Truck = ObjectType("truck", "asset_id", properties=[
@@ -132,14 +132,14 @@ class TestQueryEngine:
         assert len(results["truck"]) == 2
 
     def test_object_set(self):
-        from symphony.ontology import (
+        from agentorchestra.ontology import (
             GraphStore,
             ObjectStore,
             ObjectType,
             OntologyEngine,
             SecurityContext,
         )
-        from symphony.tools.base import ToolParameter
+        from agentorchestra.tools.base import ToolParameter
 
         store = ObjectStore(graph=GraphStore())
         Customer = ObjectType("customer", "cid", properties=[

@@ -15,7 +15,7 @@ Agent 执行的可观测能力：持久化轨迹记录 + 实时事件系统。
 记录 Agent 执行的完整轨迹，供事后审计与分析。
 
 ```python
-from symphony.observability import TraceLogger
+from agentorchestra.observability import TraceLogger
 
 logger = TraceLogger(
     output_dir="memory/traces",
@@ -54,7 +54,7 @@ logger.finalize()                     # 生成统计 + 关闭文件
 ## 使用示例
 
 ```python
-from symphony.observability import TraceLogger
+from agentorchestra.observability import TraceLogger
 
 with TraceLogger(output_dir="memory/traces") as logger:
     logger.log_event("session_start", {"agent_name": "Assistant"})

@@ -1,7 +1,7 @@
 """ontology 企业级 Ontology 测试"""
 import pytest
 
-from symphony.ontology import (
+from agentorchestra.ontology import (
     ActionType,
     GraphStore,
     Interface,
@@ -13,7 +13,7 @@ from symphony.ontology import (
     TransactionManager,
     Workflow,
 )
-from symphony.tools.base import ToolParameter
+from agentorchestra.tools.base import ToolParameter
 
 
 def make_customer() -> ObjectType:
@@ -115,7 +115,7 @@ class TestOntologyEngine:
         engine.register_object_type(make_customer())
         engine.allow(["admin"], resource="*", action="*")
 
-        from symphony.tools.registry import ToolRegistry
+        from agentorchestra.tools.registry import ToolRegistry
         registry = ToolRegistry()
         mounted = engine.mount(registry)
         assert "QueryCustomer" in mounted

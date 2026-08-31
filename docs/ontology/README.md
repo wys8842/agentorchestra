@@ -44,12 +44,12 @@ ontology/
 ## 快速使用
 
 ```python
-from symphony.ontology import (
+from agentorchestra.ontology import (
     ObjectType, ActionType, Function, Interface, OntologyEngine,
     SecurityContext, Workflow, StepNode,
 )
-from symphony.tools.base import ToolParameter
-from symphony.tools.registry import ToolRegistry
+from agentorchestra.tools.base import ToolParameter
+from agentorchestra.tools.registry import ToolRegistry
 
 # ① 定义对象类型
 Customer = ObjectType("customer", "customer_id", properties=[

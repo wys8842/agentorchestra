@@ -9,7 +9,7 @@ Skills 是"知识外化"的核心实现，让模型按需加载领域知识，�
 - Token 节省：预期节省 85% Token（20 个 skills 场景）
 
 使用示例：
-    >>> from symphony.skills import SkillLoader
+    >>> from agentorchestra.skills import SkillLoader
     >>> loader = SkillLoader(skills_dir=Path("skills"))
     >>> # 获取所有技能描述（用于系统提示词）
     >>> descriptions = loader.get_descriptions()

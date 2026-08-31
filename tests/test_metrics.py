@@ -1,6 +1,6 @@
 """core/metrics 指标测试"""
 
-from symphony.core.metrics import MetricsCollector
+from agentorchestra.core.metrics import MetricsCollector
 
 
 class TestMetricsCollector:

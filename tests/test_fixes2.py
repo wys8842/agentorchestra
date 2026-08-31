@@ -1,21 +1,21 @@
 """第二轮完善修复回归测试"""
 
-from symphony.tools.base import Tool, ToolParameter
-from symphony.tools.registry import ToolRegistry
-from symphony.tools.response import ToolResponse
+from agentorchestra.tools.base import Tool, ToolParameter
+from agentorchestra.tools.registry import ToolRegistry
+from agentorchestra.tools.response import ToolResponse
 
 
 class TestSimpleAgentSummaryFilter:
     """L7: SimpleAgent 过滤 summary 角色"""
 
     def test_summary_roles_filtered(self):
-        from symphony.agents.simple_agent import SimpleAgent
-        from symphony.core.message import Message
+        from agentorchestra.agents.simple_agent import SimpleAgent
+        from agentorchestra.core.message import Message
 
         # 构造带 summary 历史的最小 agent
         agent = SimpleAgent.__new__(SimpleAgent)
         agent.system_prompt = "system"
-        from symphony.context.history import HistoryManager
+        from agentorchestra.context.history import HistoryManager
         hm = HistoryManager()
         hm.append(Message("旧摘要", "summary"))
         hm.append(Message("你好", "user"))
@@ -36,7 +36,7 @@ class TestReActToolTruncation:
     """M9: 同步路径工具输出截断（截断器集成验证）"""
 
     def test_truncator_configuration(self):
-        from symphony.context.truncator import ObservationTruncator
+        from agentorchestra.context.truncator import ObservationTruncator
         truncator = ObservationTruncator(max_lines=1, max_bytes=10)
         result = truncator.truncate("Long", "x" * 100)
         assert result["truncated"] is True
@@ -46,7 +46,7 @@ class TestReActToolTruncation:
         """验证 _run_impl 中截断逻辑存在（静态检查）"""
         import inspect
 
-        from symphony.agents.react_agent import ReActAgent
+        from agentorchestra.agents.react_agent import ReActAgent
         source = inspect.getsource(ReActAgent._run_impl)
         # 同步主循环中应调用 truncator
         assert "self.truncator" in source or "truncate" in source
@@ -56,8 +56,8 @@ class TestCircuitBreaker:
     """M8: 熔断器对 Tool 对象生效"""
 
     def test_circuit_breaker_blocks_tool(self):
-        from symphony.agents.react_agent import ReActAgent
-        from symphony.tools.circuit_breaker import CircuitBreaker
+        from agentorchestra.agents.react_agent import ReActAgent
+        from agentorchestra.tools.circuit_breaker import CircuitBreaker
 
         class FailTool(Tool):
             def __init__(self):
@@ -91,7 +91,7 @@ class TestGraphNodeProps:
     """GraphStore merge_node 显式 name 不冲突"""
 
     def test_name_field_conflict(self):
-        from symphony.ontology.storage.graph_store import GraphStore
+        from agentorchestra.ontology.storage.graph_store import GraphStore
         g = GraphStore()
         # 业务字段含 name，但节点名显式指定
         g.merge_node("customer", {"name": "张三", "id": "c1"}, name="customer:c1")

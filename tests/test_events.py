@@ -1,8 +1,8 @@
 """core 事件系统/流式/会话/响应模型测试"""
 
-from symphony.core.lifecycle import AgentEvent, EventType, ExecutionContext
-from symphony.core.llm_response import LLMResponse
-from symphony.core.streaming import (
+from agentorchestra.core.lifecycle import AgentEvent, EventType, ExecutionContext
+from agentorchestra.core.llm_response import LLMResponse
+from agentorchestra.core.streaming import (
     StreamBuffer,
     StreamEvent,
     StreamEventType,

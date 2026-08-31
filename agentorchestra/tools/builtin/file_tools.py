@@ -8,8 +8,8 @@
 
 使用示例：
 ```python
-from symphony import ToolRegistry
-from symphony.tools.builtin import ReadTool, WriteTool, EditTool
+from agentorchestra import ToolRegistry
+from agentorchestra.tools.builtin import ReadTool, WriteTool, EditTool
 
 registry = ToolRegistry()
 registry.register_tool(ReadTool(project_root="./"))

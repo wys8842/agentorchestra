@@ -68,7 +68,7 @@ class SimpleAgent(Agent):
         """
         from datetime import datetime
 
-        from symphony.observability import TraceLogger
+        from agentorchestra.observability import TraceLogger
 
         session_start_time = datetime.now()
 

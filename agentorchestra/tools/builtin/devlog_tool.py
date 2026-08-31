@@ -17,9 +17,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from symphony.tools.base import Tool, ToolParameter
-from symphony.tools.errors import ToolErrorCode
-from symphony.tools.response import ToolResponse
+from agentorchestra.tools.base import Tool, ToolParameter
+from agentorchestra.tools.errors import ToolErrorCode
+from agentorchestra.tools.response import ToolResponse
 
 # 支持的日志类别
 CATEGORIES = {
