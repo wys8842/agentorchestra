@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# 测试
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 运行时产物
+memory/
+tool-output/
+logs/
+*.db
+*.sqlite3
+
+# 环境
+.vscode/
+.idea/
+.env
+*.env
+
+# 系统
+.DS_Store
+Thumbs.db

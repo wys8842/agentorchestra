@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "symphony"
+version = "1.0.0"
+description = "Symphony - 企业级多智能体与 Ontology 编排框架"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Symphony Team", email = "wyoshmx@163.com" },
+]
+keywords = ["agent", "llm", "multi-agent", "ontology", "palantir", "framework"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "pydantic>=2.0",
+    "openai>=1.0",
+    "tiktoken>=0.5",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.30"]
+gemini = ["google-generativeai>=0.3"]
+mcp = ["mcp>=1.0"]
+neo4j = ["neo4j>=5.0"]
+yaml = ["pyyaml>=6.0"]
+all = [
+    "anthropic>=0.30",
+    "google-generativeai>=0.3",
+    "mcp>=1.0",
+    "neo4j>=5.0",
+    "pyyaml>=6.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.0",
+]
+
+[project.urls]
+Homepage = "https://example.com/symphony"
+
+[tool.setuptools.packages.find]
+include = ["symphony*"]
+
+[tool.setuptools.package-data]
+symphony = ["**/*.json", "**/*.ttl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+# E501 行太长不强求；__init__.py 允许导入不在顶部（先配日志）
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["E402"]
