@@ -4,13 +4,17 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Set
+from typing import TYPE_CHECKING, List, Optional, Set
+
+if TYPE_CHECKING:
+    from .registry import ToolRegistry
 
 
-class ToolFilter(ABC):
+class BaseToolFilter(ABC):
     """工具过滤器基类
 
     用于在子代理运行时限制可用工具集合。
+    子类应继承此类并实现 filter() 方法。
     """
 
     @abstractmethod
@@ -37,23 +41,40 @@ class ToolFilter(ABC):
         """
         pass
 
+    def filter_with_registry(self, registry: 'ToolRegistry') -> List[str]:
+        """基于注册表过滤（可感知 Tool 对象属性）
 
-class ReadOnlyFilter(ToolFilter):
+        默认实现退化为按名称过滤；子类可基于工具元数据增强。
+
+        Args:
+            registry: 工具注册表
+
+        Returns:
+            过滤后的工具名称列表
+        """
+        return self.filter(registry.list_tools())
+
+
+class ReadOnlyFilter(BaseToolFilter):
     """只读工具过滤器
 
     只允许使用只读工具，适用于：
     - explore（探索代码库）
     - plan（规划任务）
     - summary（归纳信息）
+
+    过滤依据：优先使用 Tool.read_only 元数据属性；对无属性的
+    函数工具回退到名称白名单判断。
     """
 
-    # 只读工具白名单
+    # 只读工具名称白名单（兼容函数工具 / 未标记属性的工具）
     READONLY_TOOLS: Set[str] = {
-        "Read", "ReadTool",
-        "LS", "LSTool",
-        "Glob", "GlobTool",
-        "Grep", "GrepTool",
+        "Read",
         "Skill", "SkillTool",
+        "python_calculator",
+        "QueryCustomer", "QueryOrder",
+        "CallComputeOrderTotal",
+        "Weather",
     }
 
     def __init__(self, additional_allowed: Optional[List[str]] = None):
@@ -66,8 +87,26 @@ class ReadOnlyFilter(ToolFilter):
         if additional_allowed:
             self.allowed_tools.update(additional_allowed)
 
+    def filter_with_registry(self, registry: 'ToolRegistry') -> List[str]:
+        """基于注册表过滤：优先按 Tool.read_only 属性判断
+
+        这是 ReadOnlyFilter 的推荐入口，避免名称字符串漂移。
+        """
+        allowed = []
+        for name in registry.list_tools():
+            tool = registry.get_tool(name)
+            if tool is not None:
+                # Tool 对象：按 read_only 属性判断
+                if getattr(tool, "read_only", False):
+                    allowed.append(name)
+            else:
+                # 函数工具：按名称白名单回退
+                if name in self.allowed_tools:
+                    allowed.append(name)
+        return allowed
+
     def filter(self, all_tools: List[str]) -> List[str]:
-        """只保留只读工具"""
+        """只保留只读工具（按名称白名单，兼容旧调用）"""
         return [tool for tool in all_tools if self.is_allowed(tool)]
 
     def is_allowed(self, tool_name: str) -> bool:
@@ -75,7 +114,7 @@ class ReadOnlyFilter(ToolFilter):
         return tool_name in self.allowed_tools
 
 
-class FullAccessFilter(ToolFilter):
+class FullAccessFilter(BaseToolFilter):
     """完全访问过滤器
 
     允许使用所有工具（除了明确禁止的危险工具），适用于：
@@ -108,7 +147,7 @@ class FullAccessFilter(ToolFilter):
         return tool_name not in self.denied_tools
 
 
-class CustomFilter(ToolFilter):
+class CustomFilter(BaseToolFilter):
     """自定义工具过滤器
 
     用户可以明确指定允许或禁止的工具列表。
@@ -144,4 +183,6 @@ class CustomFilter(ToolFilter):
             return tool_name in self.allowed
         else:  # blacklist
             return tool_name not in self.denied
+
+
 

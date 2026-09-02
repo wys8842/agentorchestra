@@ -9,6 +9,7 @@
 注意：MemoryTool 和 RAGTool 已被移除，如需使用请自行实现
 """
 
+import logging
 import math
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -17,6 +18,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import tiktoken
 
 from ..core.message import Message
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -149,7 +152,7 @@ class ContextBuilder:
                 knowledge_packets = self.knowledge_provider(user_query) or []
                 packets.extend(knowledge_packets)
             except Exception as e:
-                print(f"⚠️ 知识提供者查询失败: {e}")
+                logger.warning(f"知识提供者查询失败: {e}")
 
         # P3: 对话历史（辅助材料）
         if conversation_history:
@@ -299,7 +302,7 @@ class ContextBuilder:
 
         # 简单截断策略（保留前N个token）
         # 实际应用中可用LLM做高保真摘要
-        print(f"⚠️ 上下文超预算 ({current_tokens} > {available_tokens})，执行截断")
+        logger.warning(f"上下文超预算 ({current_tokens} > {available_tokens})，执行截断")
 
         # 按段落截断，保留结构
         lines = context.split("\n")

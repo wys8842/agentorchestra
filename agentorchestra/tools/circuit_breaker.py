@@ -2,7 +2,7 @@
 
 import time
 from collections import defaultdict
-from typing import Dict
+from typing import Any, Dict
 
 from .response import ToolResponse, ToolStatus
 
@@ -19,6 +19,19 @@ class CircuitBreaker:
     状态机：
     Closed (正常) → Open (熔断) → Closed (恢复)
     """
+
+    # 不应触发熔断的"预期内"错误码
+    NON_FAILURE_CODES = frozenset({
+        "NOT_FOUND",
+        "INVALID_PARAM",
+        "INVALID_FORMAT",
+        "ACCESS_DENIED",
+        "PERMISSION_DENIED",
+        "IS_DIRECTORY",
+        "BINARY_FILE",
+        "CONFLICT",
+        "TIMEOUT",
+    })
 
     def __init__(
         self,
@@ -82,10 +95,12 @@ class CircuitBreaker:
         if not self.enabled:
             return
 
-        # 判断是否是错误
-        is_error = response.status == ToolStatus.ERROR
-
-        if is_error:
+        # 判断是否是真正的失败（排除预期内的业务错误）
+        if response.status == ToolStatus.ERROR:
+            error_code = response.error_info.get("code") if response.error_info else None
+            # 如果是预期内错误码，不计入失败
+            if error_code in self.NON_FAILURE_CODES:
+                return
             self._on_failure(tool_name)
         else:
             self._on_success(tool_name)
@@ -98,7 +113,6 @@ class CircuitBreaker:
         # 检查是否达到阈值
         if self.failure_counts[tool_name] >= self.failure_threshold:
             self.open_timestamps[tool_name] = time.time()
-            print(f"🔴 Circuit Breaker: 工具 '{tool_name}' 已熔断（连续 {self.failure_counts[tool_name]} 次失败）")
 
     def _on_success(self, tool_name: str):
         """处理成功"""
@@ -111,15 +125,13 @@ class CircuitBreaker:
             return
 
         self.open_timestamps[tool_name] = time.time()
-        print(f"🔴 Circuit Breaker: 工具 '{tool_name}' 已手动熔断")
 
     def close(self, tool_name: str):
         """关闭熔断，恢复工具"""
         self.failure_counts[tool_name] = 0
         self.open_timestamps.pop(tool_name, None)
-        print(f"🟢 Circuit Breaker: 工具 '{tool_name}' 已恢复")
 
-    def get_status(self, tool_name: str) -> Dict[str, any]:
+    def get_status(self, tool_name: str) -> Dict[str, Any]:
         """
         获取工具的熔断状态
 

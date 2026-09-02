@@ -1,4 +1,4 @@
-"""OntologyEngine - 企业级 Ontology 统一入口（对标 Palantir Ontology）
+"""OntologyEngine - 企业级 Ontology 统一入口
 
 组织运营语义层：
 - 注册对象类型 / 动作 / 函数 / 接口
@@ -23,7 +23,7 @@ from .semantic.interface import Interface
 from .semantic.object_type import ObjectType
 from .storage.materialization import MaterializationManager, MaterializationTarget
 from .storage.object_store import ObjectStore
-from .tool_gen import ToolGenerator
+from .tool_generator import ToolGenerator
 
 
 class OntologyEngine:
@@ -34,15 +34,19 @@ class OntologyEngine:
         object_store: Optional[ObjectStore] = None,
         security_ctx: Optional[SecurityContext] = None,
     ):
-        # 存储层
-        self.object_store = object_store or ObjectStore()
-        self.graph_store = self.object_store.graph
-
         # 治理层
         self.security = SecurityManager()
         self.audit = AuditManager()
         self.branching = BranchManager()
         self.materialization = MaterializationManager()
+
+        # 存储层（注入物化管理器，写操作触发物化回写）
+        self.object_store = object_store or ObjectStore(
+            materializer=self.materialization)
+        # 调用方传入的 store 也补挂物化（若尚未配置）
+        if getattr(self.object_store, 'materializer', None) is None:
+            self.object_store.materializer = self.materialization
+        self.graph_store = self.object_store.graph
         self.security_ctx = security_ctx or SecurityContext()
 
         # 语义注册表
@@ -62,15 +66,17 @@ class OntologyEngine:
         self.scheduler = Scheduler()
         self.transaction = TransactionManager()
 
-        # 统一词汇校验器（对标 knowledge validate_triple）
+        # 统一词汇校验器
         from .semantic.vocabulary import VocabularyValidator
         self.vocabulary = VocabularyValidator(self.object_types)
 
-        # 工具生成器
+        # 工具生成器（注入审计 + 查询引擎，使工具执行产生审计并复用统一查询语义）
         self.tool_generator = ToolGenerator(
             store=self.object_store,
             security=self.security,
             security_ctx=self.security_ctx,
+            audit=self.audit,
+            query_engine=self.query,
         )
 
     # ==================== 语义注册 ====================
@@ -85,7 +91,7 @@ class OntologyEngine:
     # ==================== 统一词汇校验 ====================
 
     def validate_triple(self, from_type: str, link_name: str, to_type: str) -> bool:
-        """校验三元组（对标 knowledge validate_triple）"""
+        """校验三元组"""
         return self.vocabulary.validate_link(from_type, link_name, to_type)
 
     def unknown_properties(self, type_name: str, obj: Dict[str, Any]) -> List[str]:
@@ -95,7 +101,7 @@ class OntologyEngine:
     # ==================== 类层次 ====================
 
     def get_subclasses(self, type_name: str, transitive: bool = True) -> List[str]:
-        """获取子类型（类层次，对标 knowledge get_subclasses）"""
+        """获取子类型（类层次， get_subclasses）"""
         return self.object_store.get_subclasses(type_name, transitive)
 
     def get_superclasses(self, type_name: str) -> List[str]:
@@ -175,7 +181,7 @@ class OntologyEngine:
             "actions": len(self.actions),
             "functions": len(self.functions),
             "interfaces": len(self.interfaces),
-            "tools": len(self.build_tools()),
+            "tools": len(self.object_types) + len(self.actions) + len(self.functions),
             "storage": self.object_store.stats(),
             "audit_entries": self.audit.count(),
         }

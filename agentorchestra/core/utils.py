@@ -126,7 +126,7 @@ def duration_seconds(start: Union[datetime, float], end: Union[datetime, float, 
     if isinstance(start, datetime) and isinstance(end, datetime):
         return (end - start).total_seconds()
 
-    return float(end) - float(start)
+    return float(end) - float(start)  # type: ignore[arg-type]
 
 
 def safe_json_load(filepath: Union[str, Path], default: Any = None) -> Any:

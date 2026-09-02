@@ -11,44 +11,23 @@ from ..core.lifecycle import EventType, LifecycleHook
 from ..core.llm import SymphonyLLM
 from ..core.message import Message
 from ..core.streaming import StreamEvent, StreamEventType
+from ..core.utils import duration_seconds, parse_tool_arguments, serialize_tool_calls
 from ..tools.registry import ToolRegistry
 
-# 新的系统提示词
 DEFAULT_REACT_SYSTEM_PROMPT = """你是一个具备推理和行动能力的 AI 助手。
 
-## 工作流程
-你可以通过调用工具来完成任务：
+## 工具调用流程
+1. **Thought**：记录推理过程（参数：reasoning）
+2. **业务工具**：获取信息或执行操作（可多次调用）
+3. **Finish**：返回最终答案（参数：answer）
 
-1. **Thought 工具**：用于记录你的推理过程和分析
-   - 在需要思考时调用
-   - 参数：reasoning（你的推理内容）
-
-2. **业务工具**：用于获取信息或执行操作
-   - 根据任务需求选择合适的工具
-   - 可以多次调用不同工具
-
-3. **Finish 工具**：用于返回最终答案
-   - 当你有足够信息得出结论时调用
-   - 参数：answer（最终答案）
-
-## 重要提醒
-- 主动使用 Thought 工具记录推理过程
-- 可以多次调用工具获取信息
+## 提醒
+- 主动使用 Thought 记录推理
 - 只有在确信有足够信息时才调用 Finish
 """
 
 
 class ReActAgent(Agent):
-    """
-    ReAct Agent - 基于 Function Calling 的推理与行动
-
-    核心改进：
-    - 使用 OpenAI Function Calling（结构化输出）
-    - 支持 Thought 工具（显式推理）
-    - 支持 Finish 工具（结束流程）
-    - 无需正则解析，解析成功率 99%+
-    """
-
     def __init__(
         self,
         name: str,
@@ -84,7 +63,21 @@ class ReActAgent(Agent):
         self._builtin_tools = {"Thought", "Finish"}
 
     def add_tool(self, tool):
-        """添加工具到工具注册表"""
+        """添加工具到工具注册表
+
+        .. deprecated::
+            使用 `register_tool` 替代（与 ToolRegistry 命名一致）。
+        """
+        import warnings
+        warnings.warn(
+            "Agent.add_tool is deprecated, use register_tool instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.tool_registry.register_tool(tool)
+
+    def register_tool(self, tool):
+        """注册工具到工具注册表"""
         self.tool_registry.register_tool(tool)
 
     def run(self, input_text: str, **kwargs) -> str:
@@ -162,7 +155,7 @@ class ReActAgent(Agent):
 
         print(f"\n🤖 {self.name} 开始处理问题: {input_text}")
 
-        while current_step < self.max_steps:
+        while current_step < self.max_steps:  # type: ignore[operator]
             current_step += 1
             print(f"\n--- 第 {current_step} 步 ---")
 
@@ -196,19 +189,7 @@ class ReActAgent(Agent):
                 self._total_tokens = total_tokens
 
             # 记录模型输出
-            if self.trace_logger:
-                self.trace_logger.log_event(
-                    "model_output",
-                    {
-                        "content": response_message.content or "",
-                        "tool_calls": len(response_message.tool_calls) if response_message.tool_calls else 0,
-                        "usage": {
-                            "total_tokens": response.usage.total_tokens if response.usage else 0,
-                            "cost": 0.0
-                        }
-                    },
-                    step=current_step
-                )
+            self._log_model_output(response_message, current_step, response.usage)
 
             # 处理工具调用
             tool_calls = response_message.tool_calls
@@ -217,40 +198,13 @@ class ReActAgent(Agent):
                 final_answer = response_message.content or "抱歉，我无法回答这个问题。"
                 print(f"💬 直接回复: {final_answer}")
 
-                # 保存到历史记录
-                self.add_message(Message(input_text, "user"))
-                self.add_message(Message(final_answer, "assistant"))
-
-                if self.trace_logger:
-                    duration = (datetime.now() - session_start_time).total_seconds()
-                    self.trace_logger.log_event(
-                        "session_end",
-                        {
-                            "duration": duration,
-                            "total_steps": current_step,
-                            "final_answer": final_answer,
-                            "status": "success"
-                        }
-                    )
-                    self.trace_logger.finalize()
-
-                return final_answer
+                return self._save_and_finalize(input_text, final_answer, session_start_time, current_step)
 
             # 将助手消息添加到历史
             messages.append({
                 "role": "assistant",
                 "content": response_message.content,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }
-                    }
-                    for tc in tool_calls
-                ]
+                "tool_calls": serialize_tool_calls(tool_calls)
             })
 
             # 执行所有工具调用
@@ -259,7 +213,7 @@ class ReActAgent(Agent):
                 tool_call_id = tool_call.id
 
                 try:
-                    arguments = json.loads(tool_call.function.arguments)
+                    arguments = parse_tool_arguments(tool_call)
                 except json.JSONDecodeError as e:
                     print(f"❌ 工具参数解析失败: {e}")
                     messages.append({
@@ -304,24 +258,8 @@ class ReActAgent(Agent):
                         final_answer = result["final_answer"]
                         print(f"🎉 最终答案: {final_answer}")
 
-                        # 保存到历史记录
-                        self.add_message(Message(input_text, "user"))
-                        self.add_message(Message(final_answer, "assistant"))
-
-                        if self.trace_logger:
-                            duration = (datetime.now() - session_start_time).total_seconds()
-                            self.trace_logger.log_event(
-                                "session_end",
-                                {
-                                    "duration": duration,
-                                    "total_steps": current_step,
-                                    "final_answer": final_answer,
-                                    "status": "success"
-                                }
-                            )
-                            self.trace_logger.finalize()
-
-                        return final_answer
+                        return self._save_and_finalize(input_text, final_answer,
+                                                       session_start_time, current_step)
 
                     # 添加工具结果到消息
                     messages.append({
@@ -333,29 +271,12 @@ class ReActAgent(Agent):
                     # 用户工具
                     print(f"🎬 调用工具: {tool_name}({arguments})")
 
-                    # 执行工具（使用基类方法，支持字典参数）
-                    result = self._execute_tool_call(tool_name, arguments)
+                    # 执行工具并处理结果（使用基类公共方法，收敛 6 处重复逻辑）
+                    tool_result = self._execute_single_tool_call(
+                        tool_name, arguments, tool_call_id, current_step)
 
-                    # 截断超长工具输出（与异步路径一致，保护上下文）
-                    try:
-                        if self.truncator:
-                            truncate_result = self.truncator.truncate(
-                                tool_name=tool_name, output=result)
-                            result = truncate_result.get('preview', result)
-                    except Exception:
-                        pass
-
-                    # 记录工具结果
-                    if self.trace_logger:
-                        self.trace_logger.log_event(
-                            "tool_result",
-                            {
-                                "tool_name": tool_name,
-                                "tool_call_id": tool_call_id,
-                                "result": result
-                            },
-                            step=current_step
-                        )
+                    result = tool_result["content"]
+                    messages.append(tool_result)
 
                     # 检查是否是错误
                     if result.startswith("❌"):
@@ -363,38 +284,14 @@ class ReActAgent(Agent):
                     else:
                         print(f"👀 观察: {result}")
 
-                    # 添加工具结果到消息
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "content": result
-                    })
-
         # 达到最大步数
         print("⏰ 已达到最大步数，流程终止。")
         final_answer = "抱歉，我无法在限定步数内完成这个任务。"
 
-        # 保存到历史记录
-        self.add_message(Message(input_text, "user"))
-        self.add_message(Message(final_answer, "assistant"))
+        return self._save_and_finalize(input_text, final_answer, session_start_time,
+                                       current_step, status="timeout")
 
-        # 记录会话结束（超时）
-        if self.trace_logger:
-            duration = (datetime.now() - session_start_time).total_seconds()
-            self.trace_logger.log_event(
-                "session_end",
-                {
-                    "duration": duration,
-                    "total_steps": current_step,
-                    "final_answer": final_answer,
-                    "status": "timeout"
-                }
-            )
-            self.trace_logger.finalize()
-
-        return final_answer
-
-    def _build_messages(self, input_text: str) -> List[Dict[str, str]]:
+    def _build_messages(self, input_text: str) -> List[Dict[str, Any]]:
         """构建消息列表"""
         messages = []
 
@@ -405,10 +302,14 @@ class ReActAgent(Agent):
                 "content": self.system_prompt
             })
 
+        # 融合多路上下文（GSSC，可选）
+        gssc_context = self._build_context(input_text)
+        user_content = gssc_context if gssc_context is not None else input_text
+
         # 添加用户问题
         messages.append({
             "role": "user",
-            "content": input_text
+            "content": user_content
         })
 
         return messages
@@ -486,9 +387,60 @@ class ReActAgent(Agent):
                 "finished": False
             }
 
+    # ==================== 公共辅助方法（三套循环复用） ====================
+
+    def _log_model_output(self, response_message, current_step: int, usage=None):
+        """记录模型输出到 trace
+
+        Args:
+            response_message: LLM 返回消息对象
+            current_step: 当前步骤
+            usage: LLM 响应级 usage 对象（优先使用）
+        """
+        if not self.trace_logger:
+            return
+        u = usage if usage is not None else getattr(response_message, 'usage', None)
+        self.trace_logger.log_event(
+            "model_output",
+            {
+                "content": response_message.content or "",
+                "tool_calls": len(response_message.tool_calls) if response_message.tool_calls else 0,
+                "usage": {
+                    "total_tokens": u.total_tokens if u is not None else 0,
+                    "cost": 0.0
+                }
+            },
+            step=current_step
+        )
+
+    def _finalize_session(self, session_start_time, current_step: int,
+                          final_answer: str, status: str):
+        """统一会话结束收尾：记录 session_end + finalize trace"""
+        if self.trace_logger:
+            duration = duration_seconds(session_start_time)
+            self.trace_logger.log_event(
+                "session_end",
+                {
+                    "duration": duration,
+                    "total_steps": current_step,
+                    "final_answer": final_answer,
+                    "status": status
+                }
+            )
+            self.trace_logger.finalize()
+
+    def _save_and_finalize(self, input_text: str, final_answer: str,
+                           session_start_time, current_step: int,
+                           status: str = "success") -> str:
+        """保存历史 + 会话结束收尾，返回最终答案"""
+        self.add_message(Message(input_text, "user"))
+        self.add_message(Message(final_answer, "assistant"))
+        self._finalize_session(session_start_time, current_step, final_answer, status)
+        return final_answer
+
     # ==================== 异步方法 ====================
 
-    async def arun(
+    async def arun(  # type: ignore[override]
         self,
         input_text: str,
         on_start: LifecycleHook = None,
@@ -544,8 +496,9 @@ class ReActAgent(Agent):
 
             print(f"\n🤖 {self.name} 开始处理问题: {input_text}")
 
-            while current_step < self.max_steps:
+            while current_step < self.max_steps:  # type: ignore[operator]
                 current_step += 1
+                self._current_step = current_step
                 print(f"\n--- 第 {current_step} 步 ---")
 
                 # 触发步骤开始事件
@@ -579,21 +532,10 @@ class ReActAgent(Agent):
                 # 累计 tokens
                 if response.usage:
                     total_tokens += response.usage.total_tokens
+                    self._total_tokens = total_tokens
 
                 # 记录模型输出
-                if self.trace_logger:
-                    self.trace_logger.log_event(
-                        "model_output",
-                        {
-                            "content": response_message.content or "",
-                            "tool_calls": len(response_message.tool_calls) if response_message.tool_calls else 0,
-                            "usage": {
-                                "total_tokens": response.usage.total_tokens if response.usage else 0,
-                                "cost": 0.0
-                            }
-                        },
-                        step=current_step
-                    )
+                self._log_model_output(response_message, current_step, response.usage)
 
                 # 处理工具调用
                 tool_calls = response_message.tool_calls
@@ -613,18 +555,7 @@ class ReActAgent(Agent):
                         total_tokens=total_tokens
                     )
 
-                    if self.trace_logger:
-                        duration = (datetime.now() - session_start_time).total_seconds()
-                        self.trace_logger.log_event(
-                            "session_end",
-                            {
-                                "duration": duration,
-                                "total_steps": current_step,
-                                "final_answer": final_answer,
-                                "status": "success"
-                            }
-                        )
-                        self.trace_logger.finalize()
+                    self._finalize_session(session_start_time, current_step, final_answer, "success")
 
                     return final_answer
 
@@ -632,17 +563,7 @@ class ReActAgent(Agent):
                 messages.append({
                     "role": "assistant",
                     "content": response_message.content,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments
-                            }
-                        }
-                        for tc in tool_calls
-                    ]
+                    "tool_calls": serialize_tool_calls(tool_calls)
                 })
 
                 # 异步并行执行工具
@@ -669,18 +590,7 @@ class ReActAgent(Agent):
                             total_tokens=total_tokens
                         )
 
-                        if self.trace_logger:
-                            duration = (datetime.now() - session_start_time).total_seconds()
-                            self.trace_logger.log_event(
-                                "session_end",
-                                {
-                                    "duration": duration,
-                                    "total_steps": current_step,
-                                    "final_answer": final_answer,
-                                    "status": "success"
-                                }
-                            )
-                            self.trace_logger.finalize()
+                        self._finalize_session(session_start_time, current_step, final_answer, "success")
 
                         return final_answer
 
@@ -715,18 +625,7 @@ class ReActAgent(Agent):
                 status="timeout"
             )
 
-            if self.trace_logger:
-                duration = (datetime.now() - session_start_time).total_seconds()
-                self.trace_logger.log_event(
-                    "session_end",
-                    {
-                        "duration": duration,
-                        "total_steps": current_step,
-                        "final_answer": final_answer,
-                        "status": "timeout"
-                    }
-                )
-                self.trace_logger.finalize()
+            self._finalize_session(session_start_time, current_step, final_answer, "timeout")
 
             return final_answer
 
@@ -746,11 +645,11 @@ class ReActAgent(Agent):
         on_tool_call: LifecycleHook = None
     ) -> List[tuple]:
         """
-        异步并行执行工具
+        异步并行执行工具（唯一异步执行入口，经 registry 熔断保护）
 
         策略：
         1. 内置工具（Thought/Finish）串行执行
-        2. 用户工具并行执行（最多 max_concurrent_tools 个）
+        2. 用户工具并行执行（最多 max_concurrent_tools 个，走 registry.async_execute_tool）
 
         Args:
             tool_calls: 工具调用列表
@@ -758,19 +657,13 @@ class ReActAgent(Agent):
             on_tool_call: 工具调用钩子
 
         Returns:
-            [(tool_name, tool_call_id, result), ...]
+            [(tool_name, tool_call_id, result_dict), ...]
         """
         results = []
 
         # 分组：内置工具 vs 用户工具
-        builtin_calls = []
-        user_calls = []
-
-        for tc in tool_calls:
-            if tc.function.name in self._builtin_tools:
-                builtin_calls.append(tc)
-            else:
-                user_calls.append(tc)
+        builtin_calls = [tc for tc in tool_calls if tc.function.name in self._builtin_tools]
+        user_calls = [tc for tc in tool_calls if tc.function.name not in self._builtin_tools]
 
         # 1. 串行执行内置工具
         for tc in builtin_calls:
@@ -778,7 +671,7 @@ class ReActAgent(Agent):
             tool_call_id = tc.id
 
             try:
-                arguments = json.loads(tc.function.arguments)
+                arguments = parse_tool_arguments(tc)
             except json.JSONDecodeError as e:
                 results.append((tool_name, tool_call_id, {"content": f"错误：参数格式不正确 - {str(e)}"}))
                 continue
@@ -824,7 +717,7 @@ class ReActAgent(Agent):
                     tool_call_id = tc.id
 
                     try:
-                        arguments = json.loads(tc.function.arguments)
+                        arguments = parse_tool_arguments(tc)
                     except json.JSONDecodeError as e:
                         return (tool_name, tool_call_id, {"content": f"错误：参数格式不正确 - {str(e)}"})
 
@@ -840,23 +733,20 @@ class ReActAgent(Agent):
 
                     print(f"🎬 调用工具: {tool_name}({arguments})")
 
-                    # 异步执行工具
-                    tool = self.tool_registry.get_tool(tool_name)
-                    if not tool:
-                        result_content = f"❌ 工具 {tool_name} 不存在"
-                    else:
-                        try:
-                            tool_response = await tool.arun_with_timing(arguments)
-                            result_content = tool_response.text
+                    # 统一经 registry 异步执行（含熔断检查/观测埋点/结果记录）
+                    tool_response = await self.tool_registry.async_execute_tool(tool_name, arguments)
+                    result_content = tool_response.text
 
-                            # 应用截断
+                    # 截断保护（仅成功/部分结果）
+                    if tool_response.status.value != "error":
+                        try:
                             truncate_result = self.truncator.truncate(
                                 tool_name=tool_name,
                                 output=result_content
                             )
                             result_content = truncate_result.get('preview', result_content)
-                        except Exception as e:
-                            result_content = f"❌ 工具执行失败: {str(e)}"
+                        except Exception:
+                            pass
 
                     # 记录工具结果
                     if self.trace_logger:
@@ -883,7 +773,7 @@ class ReActAgent(Agent):
 
         return results
 
-    async def arun_stream(
+    async def arun_stream(  # type: ignore[override]
         self,
         input_text: str,
         on_start: LifecycleHook = None,
@@ -932,8 +822,9 @@ class ReActAgent(Agent):
 
             print(f"\n🤖 {self.name} 开始处理问题: {input_text}")
 
-            while current_step < self.max_steps:
+            while current_step < self.max_steps:  # type: ignore[operator]
                 current_step += 1
+                self._current_step = current_step
 
                 # 发送步骤开始事件
                 yield StreamEvent.create(
@@ -1018,21 +909,11 @@ class ReActAgent(Agent):
                     messages.append({
                         "role": "assistant",
                         "content": response_message.content,
-                        "tool_calls": [
-                            {
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments
-                                }
-                            }
-                            for tc in tool_calls
-                        ]
+                        "tool_calls": serialize_tool_calls(tool_calls)
                     })
 
                     # 执行工具调用
-                    tool_results = await self._execute_tools_async_stream(
+                    tool_results = await self._execute_tools_async(
                         tool_calls,
                         current_step,
                         on_tool_call
@@ -1063,7 +944,7 @@ class ReActAgent(Agent):
                                     (tc for tc in tool_calls if tc.id == tool_call_id),
                                     None)
                                 if matched is not None:
-                                    args = json.loads(matched.function.arguments)
+                                    args = parse_tool_arguments(matched)
                                     final_answer = args.get("answer", result_dict["content"])
                                 else:
                                     final_answer = result_dict["content"]
@@ -1136,121 +1017,3 @@ class ReActAgent(Agent):
 
             await self._emit_event(EventType.AGENT_ERROR, on_error, error=error_msg)
             raise
-
-    async def _execute_tools_async_stream(
-        self,
-        tool_calls: List[Any],
-        current_step: int,
-        on_tool_call: LifecycleHook = None
-    ) -> List[tuple]:
-        """
-        异步执行工具调用（流式版本，发送工具调用开始事件）
-
-        Args:
-            tool_calls: 工具调用列表
-            current_step: 当前步骤
-            on_tool_call: 工具调用钩子
-
-        Returns:
-            List[tuple]: (tool_name, tool_call_id, result_dict) 列表
-        """
-        results = []
-
-        # 分组：内置工具 vs 用户工具
-        builtin_calls = [tc for tc in tool_calls if tc.function.name in self._builtin_tools]
-        user_calls = [tc for tc in tool_calls if tc.function.name not in self._builtin_tools]
-
-        # 1. 串行执行内置工具
-        for tc in builtin_calls:
-            tool_name = tc.function.name
-            tool_call_id = tc.id
-
-            try:
-                arguments = json.loads(tc.function.arguments)
-            except json.JSONDecodeError as e:
-                results.append((tool_name, tool_call_id, {"content": f"错误：参数格式不正确 - {str(e)}"}))
-                continue
-
-            # 触发工具调用事件
-            await self._emit_event(
-                EventType.TOOL_CALL,
-                on_tool_call,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                args=arguments,
-                step=current_step
-            )
-
-            # 执行内置工具
-            if tool_name == "Thought":
-                reasoning = arguments.get("reasoning", "")
-                print(f"💭 思考: {reasoning}")
-                result_content = f"已记录推理过程: {reasoning}"
-            elif tool_name == "Finish":
-                answer = arguments.get("answer", "")
-                print(f"✅ 最终答案: {answer}")
-                result_content = answer
-            else:
-                result_content = f"未知的内置工具: {tool_name}"
-
-            results.append((tool_name, tool_call_id, {"content": result_content}))
-
-        # 2. 并行执行用户工具
-        if user_calls:
-            max_concurrent = getattr(self.config, 'max_concurrent_tools', 3)
-            semaphore = asyncio.Semaphore(max_concurrent)
-
-            async def execute_one(tc):
-                async with semaphore:
-                    tool_name = tc.function.name
-                    tool_call_id = tc.id
-
-                    try:
-                        arguments = json.loads(tc.function.arguments)
-                    except json.JSONDecodeError as e:
-                        return (tool_name, tool_call_id, {"content": f"错误：参数格式不正确 - {str(e)}"})
-
-                    # 触发工具调用事件
-                    await self._emit_event(
-                        EventType.TOOL_CALL,
-                        on_tool_call,
-                        tool_name=tool_name,
-                        tool_call_id=tool_call_id,
-                        args=arguments,
-                        step=current_step
-                    )
-
-                    print(f"🔧 调用工具: {tool_name}({arguments})")
-
-                    # 异步执行工具
-                    tool = self.tool_registry.get_tool(tool_name)
-                    if not tool:
-                        result_content = f"❌ 工具 {tool_name} 不存在"
-                    else:
-                        try:
-                            tool_response = await tool.arun_with_timing(arguments)
-                            result_content = tool_response.text
-
-                            # 应用截断
-                            truncate_result = self.truncator.truncate(
-                                tool_name=tool_name,
-                                output=result_content
-                            )
-                            result_content = truncate_result.get('preview', result_content)
-                        except Exception as e:
-                            result_content = f"❌ 工具执行失败: {str(e)}"
-
-                    if result_content.startswith("❌"):
-                        print(result_content)
-                    else:
-                        print(f"👀 观察: {result_content}")
-
-                    return (tool_name, tool_call_id, {"content": result_content})
-
-            # 并行执行
-            user_results = await asyncio.gather(*[execute_one(tc) for tc in user_calls])
-            results.extend(user_results)
-
-        return results
-
-

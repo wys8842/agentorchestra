@@ -1,4 +1,4 @@
-"""Vocabulary - 统一词汇校验（对标 knowledge 的 validate_triple）
+"""Vocabulary - 统一词汇校验
 
 统一词汇（统一语言）：
 - 对象属性必须是 ObjectType 声明的属性
@@ -8,13 +8,13 @@
 提供显式校验接口，供 ObjectStore / engine 使用。
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 class VocabularyValidator:
     """统一词汇校验器"""
 
-    def __init__(self, object_types: Dict[str, Any] = None):
+    def __init__(self, object_types: Optional[Dict[str, Any]] = None):
         """初始化
 
         Args:
@@ -73,15 +73,3 @@ class VocabularyValidator:
         if type_def is None:
             return False
         return type_def.is_subclass_of(expected_type, self.object_types)
-
-    # ==================== 综合 ====================
-
-    def validate_object(self, type_name: str, obj: Dict[str, Any]) -> List[str]:
-        """综合校验对象：属性词汇 + 主键 + 必填"""
-        from .object_type import ObjectType  # noqa: F401
-        obj_type = self.object_types.get(type_name)
-        if not obj_type:
-            return [f"对象类型不存在: {type_name}"]
-
-        errors = list(obj_type.validate_object(obj))
-        return errors

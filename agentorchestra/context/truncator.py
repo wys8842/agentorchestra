@@ -13,6 +13,8 @@ import time
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from ..core.utils import measure_elapsed_ms
+
 
 class ObservationTruncator:
     """工具输出截断器
@@ -102,7 +104,7 @@ class ObservationTruncator:
                 "stats": {
                     "original_lines": len(lines),
                     "original_bytes": bytes_size,
-                    "time_ms": int((time.time() - start) * 1000)
+                    "time_ms": measure_elapsed_ms(start)
                 }
             }
 
@@ -129,7 +131,7 @@ class ObservationTruncator:
                 "original_bytes": bytes_size,
                 "kept_lines": len(truncated_lines),
                 "kept_bytes": truncated_bytes,
-                "time_ms": int((time.time() - start) * 1000)
+                "time_ms": measure_elapsed_ms(start)
             }
         }
 

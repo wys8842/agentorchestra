@@ -12,7 +12,7 @@ class Message(BaseModel):
 
     content: str
     role: MessageRole
-    timestamp: datetime = None
+    timestamp: Optional[datetime] = None
     metadata: Optional[Dict[str, Any]] = None
 
     def __init__(self, content: str, role: MessageRole, **kwargs):

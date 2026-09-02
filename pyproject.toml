@@ -8,17 +8,16 @@ version = "1.0.0"
 description = "Symphony - 企业级多智能体与 Ontology 编排框架"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
     { name = "Symphony Team", email = "wyoshmx@163.com" },
 ]
-keywords = ["agent", "llm", "multi-agent", "ontology", "palantir", "framework"]
+keywords = ["agent", "llm", "multi-agent", "ontology", "framework"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
 

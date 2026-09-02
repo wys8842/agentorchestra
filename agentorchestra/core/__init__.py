@@ -7,7 +7,10 @@ from .exceptions import SymphonyException
 from .health import HealthCheck
 from .hot_config import ConfigWatch
 from .llm import SymphonyLLM
-from .llm_response import LLMResponse, StreamStats
+from .llm_response import LLMResponse
+
+# 向后兼容：StreamStats 已合并到 LLMResponse
+StreamStats = LLMResponse
 from .logging import get_logger, setup_logging
 from .message import Message
 from .metrics import MetricsCollector, get_metrics

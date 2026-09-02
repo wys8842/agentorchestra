@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from ...core.utils import atomic_write
 from ..base import Tool, ToolParameter
 from ..errors import ToolErrorCode
 from ..response import ToolResponse
@@ -32,7 +33,30 @@ if TYPE_CHECKING:
     from ..registry import ToolRegistry
 
 
-class ReadTool(Tool):
+class FileToolMixin:
+    """文件工具公共 mixin：路径解析 + 文件备份"""
+
+    working_dir: Path  # Defined by subclasses
+
+    def _resolve_path(self, path: str) -> Path:
+        """解析相对路径（兼容 Windows 和 Linux）"""
+        path = path.replace('\\', '/')
+        if os.path.isabs(path):
+            return Path(path)
+        return self.working_dir / path
+
+    def _backup_file(self, full_path: Path) -> Path:
+        """备份文件"""
+        backup_dir = full_path.parent / ".backups"
+        backup_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"{full_path.name}.{timestamp}.bak"
+        backup_path = backup_dir / backup_name
+        shutil.copy2(full_path, backup_path)
+        return backup_path
+
+
+class ReadTool(Tool, FileToolMixin):
     """文件读取工具
 
     功能：
@@ -57,7 +81,8 @@ class ReadTool(Tool):
         super().__init__(
             name="Read",
             description="读取文件内容或列出目录内容，支持行号范围和元数据缓存",
-            expandable=False
+            expandable=False,
+            read_only=True
         )
         self.project_root = Path(project_root).resolve()
         self.working_dir = Path(working_dir).resolve() if working_dir else self.project_root
@@ -134,7 +159,7 @@ class ReadTool(Tool):
 
             # 缓存元数据到 ToolRegistry
             if self.registry:
-                self.registry.cache_read_metadata(path, {
+                self.registry.set_read_metadata(path, {
                     "file_mtime_ms": file_mtime_ms,
                     "file_size_bytes": file_size_bytes
                 })
@@ -215,9 +240,9 @@ class ReadTool(Tool):
                 text = f"目录 '{path}' 为空"
             else:
                 lines = [f"目录 '{path}' 包含 {total_files} 个文件，{total_dirs} 个目录：\n"]
-                for entry in entries:
-                    type_icon = "📁" if entry["type"] == "directory" else "📄"
-                    lines.append(f"{type_icon} {entry['name']:<40} {entry['size']:>10} {entry['mtime']}")
+                for entry_info in entries:
+                    type_icon = "📁" if entry_info["type"] == "directory" else "📄"
+                    lines.append(f"{type_icon} {entry_info['name']:<40} {entry_info['size']:>10} {entry_info['mtime']}")
                 text = "\n".join(lines)
 
             return ToolResponse.success(
@@ -241,7 +266,7 @@ class ReadTool(Tool):
                 message=f"列出目录失败：{str(e)}"
             )
 
-    def _format_size(self, size: int) -> str:
+    def _format_size(self, size: float) -> str:
         """格式化文件大小"""
         for unit in ['B', 'KB', 'MB', 'GB']:
             if size < 1024.0:
@@ -255,20 +280,8 @@ class ReadTool(Tool):
         dt = datetime.fromtimestamp(timestamp)
         return dt.strftime("%Y-%m-%d %H:%M:%S")
 
-    def _resolve_path(self, path: str) -> Path:
-        """解析相对路径（兼容 Windows 和 Linux）"""
-        # 统一路径分隔符：将反斜杠转换为正斜杠
-        path = path.replace('\\', '/')
 
-        # 如果是绝对路径，直接使用
-        if os.path.isabs(path):
-            return Path(path)
-
-        # 否则相对于 working_dir
-        return self.working_dir / path
-
-
-class WriteTool(Tool):
+class WriteTool(Tool, FileToolMixin):
     """文件写入工具
 
     功能：
@@ -367,13 +380,8 @@ class WriteTool(Tool):
                 # 确保父目录存在
                 full_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # 原子写入（临时文件 + 重命名）
-            temp_path = full_path.with_suffix(full_path.suffix + '.tmp')
-            with open(temp_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-
-            # 原子重命名
-            os.replace(temp_path, full_path)
+            # 原子写入（临时文件 + 替换）
+            atomic_write(str(full_path), content)
 
             size_bytes = len(content.encode('utf-8'))
 
@@ -397,26 +405,8 @@ class WriteTool(Tool):
                 message=f"写入文件失败：{str(e)}"
             )
 
-    def _backup_file(self, full_path: Path) -> Path:
-        """备份文件"""
-        backup_dir = full_path.parent / ".backups"
-        backup_dir.mkdir(exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_name = f"{full_path.name}.{timestamp}.bak"
-        backup_path = backup_dir / backup_name
-
-        shutil.copy2(full_path, backup_path)
-        return backup_path
-
-    def _resolve_path(self, path: str) -> Path:
-        """解析相对路径"""
-        if os.path.isabs(path):
-            return Path(path)
-        return self.working_dir / path
-
-
-class EditTool(Tool):
+class EditTool(Tool, FileToolMixin):
     """文件编辑工具
 
     功能：
@@ -533,8 +523,7 @@ class EditTool(Tool):
             if matches != 1:
                 return ToolResponse.error(
                     code=ToolErrorCode.INVALID_PARAM,
-                    message=f"old_string 必须唯一匹配文件内容。找到 {matches} 处匹配。",
-                    data={"matches": matches}
+                    message=f"old_string 必须唯一匹配文件内容。找到 {matches} 处匹配。"
                 )
 
             # 执行替换
@@ -543,9 +532,8 @@ class EditTool(Tool):
             # 备份原文件
             backup_path = self._backup_file(full_path)
 
-            # 写入新内容
-            with open(full_path, 'w', encoding='utf-8') as f:
-                f.write(new_content)
+            # 原子写入新内容
+            atomic_write(str(full_path), new_content)
 
             changed_bytes = len(new_string.encode('utf-8')) - len(old_string.encode('utf-8'))
 
@@ -569,26 +557,8 @@ class EditTool(Tool):
                 message=f"编辑文件失败：{str(e)}"
             )
 
-    def _backup_file(self, full_path: Path) -> Path:
-        """备份文件"""
-        backup_dir = full_path.parent / ".backups"
-        backup_dir.mkdir(exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_name = f"{full_path.name}.{timestamp}.bak"
-        backup_path = backup_dir / backup_name
-
-        shutil.copy2(full_path, backup_path)
-        return backup_path
-
-    def _resolve_path(self, path: str) -> Path:
-        """解析相对路径"""
-        if os.path.isabs(path):
-            return Path(path)
-        return self.working_dir / path
-
-
-class MultiEditTool(Tool):
+class MultiEditTool(Tool, FileToolMixin):
     """批量编辑工具
 
     功能：
@@ -704,8 +674,7 @@ class MultiEditTool(Tool):
                 if matches != 1:
                     return ToolResponse.error(
                         code=ToolErrorCode.INVALID_PARAM,
-                        message=f"编辑项 {i}: old_string 必须唯一匹配。找到 {matches} 处匹配。",
-                        data={"edit_index": i, "matches": matches}
+                        message=f"编辑项 {i}: old_string 必须唯一匹配。找到 {matches} 处匹配。"
                     )
 
             # 执行所有替换（原子性）
@@ -715,9 +684,8 @@ class MultiEditTool(Tool):
             # 备份原文件
             backup_path = self._backup_file(full_path)
 
-            # 写入新内容
-            with open(full_path, 'w', encoding='utf-8') as f:
-                f.write(content)
+            # 原子写入新内容
+            atomic_write(str(full_path), content)
 
             changed_bytes = len(content.encode('utf-8')) - len(original_content.encode('utf-8'))
 
@@ -741,22 +709,4 @@ class MultiEditTool(Tool):
                 code=ToolErrorCode.INTERNAL_ERROR,
                 message=f"批量编辑失败：{str(e)}"
             )
-
-    def _backup_file(self, full_path: Path) -> Path:
-        """备份文件"""
-        backup_dir = full_path.parent / ".backups"
-        backup_dir.mkdir(exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_name = f"{full_path.name}.{timestamp}.bak"
-        backup_path = backup_dir / backup_name
-
-        shutil.copy2(full_path, backup_path)
-        return backup_path
-
-    def _resolve_path(self, path: str) -> Path:
-        """解析相对路径"""
-        if os.path.isabs(path):
-            return Path(path)
-        return self.working_dir / path
 

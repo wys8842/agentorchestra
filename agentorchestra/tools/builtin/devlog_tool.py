@@ -17,9 +17,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from agentorchestra.tools.base import Tool, ToolParameter
-from agentorchestra.tools.errors import ToolErrorCode
-from agentorchestra.tools.response import ToolResponse
+from ...core.utils import atomic_write, safe_json_load, truncate_text
+from ...tools.base import Tool, ToolParameter
+from ...tools.errors import ToolErrorCode
+from ...tools.response import ToolResponse
 
 # 支持的日志类别
 CATEGORIES = {
@@ -122,14 +123,15 @@ class DevLogStore:
 
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
-        stats = {
+        by_category: Dict[str, int] = {}
+        stats: Dict[str, Any] = {
             "total_entries": len(self.entries),
-            "by_category": {}
+            "by_category": by_category
         }
 
         for entry in self.entries:
             cat = entry.category
-            stats["by_category"][cat] = stats["by_category"].get(cat, 0) + 1
+            by_category[cat] = by_category.get(cat, 0) + 1
 
         return stats
 
@@ -154,8 +156,7 @@ class DevLogStore:
         # 最近日志
         if recent:
             recent_summary = "; ".join([
-                f"[{e.category}] {e.content[:30]}..."
-                if len(e.content) > 30 else f"[{e.category}] {e.content}"
+                f"[{e.category}] {truncate_text(e.content, 30)}"
                 for e in recent[-3:]  # 只显示最近 3 条
             ])
             summary_parts.append(f"最近: {recent_summary}")
@@ -266,14 +267,14 @@ class DevLogTool(Tool):
                 type="string",
                 description="操作类型：append（追加）、read（读取）、summary（摘要）、clear（清空）",
                 required=True,
-                enum=["append", "read", "summary", "clear"]
+                enum=["append", "read", "summary", "clear"]  # type: ignore[call-arg]
             ),
             ToolParameter(
                 name="category",
                 type="string",
                 description=f"日志类别（append 时必填）：{', '.join(CATEGORIES.keys())}",
                 required=False,
-                enum=list(CATEGORIES.keys())
+                enum=list(CATEGORIES.keys())  # type: ignore[call-arg]
             ),
             ToolParameter(
                 name="content",
@@ -310,7 +311,7 @@ class DevLogTool(Tool):
                 return self._handle_clear()
             else:
                 return ToolResponse.error(
-                    code=ToolErrorCode.INVALID_PARAMETERS,
+                    code=ToolErrorCode.INVALID_PARAM,
                     message=f"未知操作：{action}"
                 )
 
@@ -356,7 +357,7 @@ class DevLogTool(Tool):
 
         # 返回成功响应
         return ToolResponse.success(
-            text=f"✅ 日志已记录 [{category}]: {content[:50]}{'...' if len(content) > 50 else ''}",
+            text=f"✅ 日志已记录 [{category}]: {truncate_text(content, 50)}",
             data={
                 "log_id": entry.id,
                 "timestamp": entry.timestamp,
@@ -426,12 +427,8 @@ class DevLogTool(Tool):
         filename = f"devlog-{self.session_id}.json"
         filepath = self.persistence_dir / filename
 
-        # 原子写入
-        temp_path = filepath.with_suffix('.tmp')
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            json.dump(self.store.to_dict(), f, indent=2, ensure_ascii=False)
-
-        temp_path.replace(filepath)
+        # 原子写入（临时文件 + 替换）
+        atomic_write(str(filepath), self.store.to_dict(), pretty=True)
 
     def _load_if_exists(self):
         """加载已有日志（如果存在）"""
@@ -439,11 +436,7 @@ class DevLogTool(Tool):
         filepath = self.persistence_dir / filename
 
         if filepath.exists():
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+            data = safe_json_load(filepath)
+            if data is not None:
                 self.store = DevLogStore.from_dict(data)
-            except Exception:
-                # 加载失败，使用新的存储
-                pass
 

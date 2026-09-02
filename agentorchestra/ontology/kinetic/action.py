@@ -1,4 +1,4 @@
-"""ActionType - 动作类型（对标 Palantir Action type）
+"""ActionType - 动作类型
 
 动能层：定义组织的写操作能力。
 - 参数定义
@@ -79,28 +79,44 @@ class ActionType:
             return {"success": False, "result": None, "errors": errors}
 
         # ④ 副作用
+        side_effect_errors = []
         for effect in self.side_effects:
             try:
                 effect(result, ctx)
             except Exception as e:
-                errors.append(f"副作用异常: {e}")
+                side_effect_errors.append(f"副作用异常: {e}")
+        errors.extend(side_effect_errors)
 
-        # ⑤ 审计
+        # ⑤ 审计（优先写 ctx 注入的审计管理器，避免治理层重复记录）
+        # 主执行成功即算成功，副作用异常仅记录不改变主结果
         self._record_audit(params, ctx, True, errors)
 
-        # 观测埋点：动作指标 + 追踪
+        # 观测埋点：动作指标
         try:
-            from agentorchestra.core.metrics import get_metrics
-            from agentorchestra.core.tracing import get_tracer
-            get_metrics().record_action_execution(self.api_name)
-            with get_tracer().span("action.execute", {"action": self.api_name}):
-                pass
+            from ...core.metrics import get_metrics
+            get_metrics().record_action_execution(self.api_name, error=bool(errors))
         except Exception:
             pass
 
         return {"success": True, "result": result, "errors": errors}
 
     def _record_audit(self, params, ctx, success, errors):
+        # 若 ctx 注入了治理层审计管理器，写入它（统一审计入口）
+        audit_mgr = (ctx or {}).get("audit")
+        if audit_mgr is not None:
+            try:
+                principal = (ctx or {}).get("principal", "unknown")
+                audit_mgr.log(
+                    principal=principal,
+                    resource=self.api_name,
+                    action="execute",
+                    detail={"params": params, "errors": list(errors)},
+                    success=success
+                )
+                return
+            except Exception:
+                pass
+        # 否则记录到动作自身
         self._audit.append({
             "action": self.api_name,
             "timestamp": datetime.now().isoformat(),

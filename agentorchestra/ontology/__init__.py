@@ -1,4 +1,4 @@
-"""ontology - 企业级 Ontology 框架（对标 Palantir Ontology）
+"""ontology - 企业级 Ontology 框架
 
 为 agentorchestra 提供企业级本体与知识图谱能力，作为 Agent 的外部大脑。
 
@@ -9,7 +9,7 @@
 - governance: 治理层（安全/审计/分支）
 - query_engine: 查询引擎（跨对象查询）
 - engine: OntologyEngine 统一入口（解耦挂载到任意 Agent）
-- tool_gen: 对象/动作/函数 → Tool 自动生成
+- tool_generator: 对象/动作/函数 → Tool 自动生成
 
 用法：
     1. 定义对象类型/动作/函数/接口
@@ -40,6 +40,7 @@ from .process import (
 from .query_engine import QueryEngine
 from .semantic import Interface, LinkType, ObjectType, VocabularyValidator
 from .storage import (
+    BaseStorageBackend,
     GraphStore,
     MaterializationManager,
     MaterializationTarget,
@@ -47,9 +48,8 @@ from .storage import (
     ObjectIndex,
     ObjectStore,
     SQLiteBackend,
-    StorageBackend,
 )
-from .tool_gen import FunctionCallTool, ObjectActionTool, ObjectQueryTool, ToolGenerator
+from .tool_generator import FunctionCallTool, ObjectActionTool, ObjectQueryTool, ToolGenerator
 
 __all__ = [
     # semantic
@@ -59,7 +59,7 @@ __all__ = [
     # storage
     "ObjectStore", "GraphStore", "ObjectIndex", "MaterializationManager",
     "MaterializationTarget",
-    "StorageBackend", "MemoryBackend", "SQLiteBackend",
+    "BaseStorageBackend", "MemoryBackend", "SQLiteBackend",
     # governance
     "SecurityContext", "SecurityManager", "PermissionRule", "AuditManager",
     "BranchManager",

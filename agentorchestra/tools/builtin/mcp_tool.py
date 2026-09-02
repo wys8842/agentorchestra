@@ -23,6 +23,7 @@ import asyncio
 import threading
 from typing import Any, Dict, List, Optional
 
+from ...core.utils import safe_json_load
 from ..base import Tool, ToolParameter
 from ..errors import ToolErrorCode
 from ..response import ToolResponse
@@ -123,7 +124,8 @@ class MCPToolAdapter(Tool):
         coro = self._session.call_tool(self._tool_name, parameters)
 
         if self._loop is not None and self._loop.is_running():
-            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+            loop: asyncio.AbstractEventLoop = self._loop
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
             return future.result(timeout=120)
 
         return asyncio.run(coro)
@@ -225,7 +227,7 @@ class MCPServerManager:
 
         # 在后台循环中建立连接并拉取工具
         future = asyncio.run_coroutine_threadsafe(
-            self._connect_all_async(servers), self._loop
+            self._connect_all_async(servers), self._loop  # type: ignore[arg-type]
         )
         return future.result(timeout=60)
 
@@ -341,15 +343,13 @@ class MCPServerManager:
         Returns:
             配置字典: {"mcpServers": {name: config}}
         """
-        import json
         from pathlib import Path
 
         path = Path(self.config_file)
         if not path.exists():
             return {"mcpServers": {}}
 
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return safe_json_load(path, default={"mcpServers": {}})
 
     # ==================== 内部工具 ====================
 

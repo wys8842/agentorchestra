@@ -79,13 +79,68 @@ class Workflow:
         return self
 
     def validate(self) -> List[str]:
-        """校验流程：节点引用是否有效"""
+        """校验流程：节点引用是否有效，无循环依赖"""
         errors = []
+
+        # 检查节点引用有效性
         for node in self.nodes.values():
             for dep in self._get_references(node):
                 if dep not in self.nodes:
                     errors.append(f"节点 '{node.node_id}' 引用不存在的节点 '{dep}'")
+
+        # 检查循环依赖（使用 DFS）
+        cycle = self._detect_cycle()
+        if cycle:
+            errors.append(f"工作流存在循环依赖: {' -> '.join(cycle)}")
+
         return errors
+
+    def _detect_cycle(self) -> Optional[List[str]]:
+        """检测循环依赖，返回循环路径（如果存在）
+
+        只检测 StepNode 和 ParallelNode 的 depends_on 依赖（实际执行路径），
+        ConditionNode 的条件分支不是真正的依赖关系，不参与循环检测。
+        """
+        # 构建后继图：node -> 依赖它的节点列表（只考虑真实依赖）
+        successors: Dict[str, List[str]] = {nid: [] for nid in self.nodes}
+
+        for nid, node in self.nodes.items():
+            # 只考虑 StepNode 和 ParallelNode 的真实依赖
+            if isinstance(node, (StepNode, ParallelNode)):
+                deps = node.depends_on if isinstance(node, StepNode) else node.branches
+                for dep in deps:
+                    if dep in self.nodes:
+                        successors[dep].append(nid)
+
+        visited = set()
+        rec_stack = set()
+        path = []
+
+        def dfs(node_id: str) -> Optional[List[str]]:
+            visited.add(node_id)
+            rec_stack.add(node_id)
+            path.append(node_id)
+
+            for succ in successors.get(node_id, []):
+                if succ not in visited:
+                    result = dfs(succ)
+                    if result:
+                        return result
+                elif succ in rec_stack:
+                    cycle_start = path.index(succ)
+                    return path[cycle_start:] + [succ]
+
+            path.pop()
+            rec_stack.remove(node_id)
+            return None
+
+        for node_id in self.nodes:
+            if node_id not in visited:
+                result = dfs(node_id)
+                if result:
+                    return result
+
+        return None
 
     def _get_references(self, node: WorkflowNode) -> List[str]:
         if isinstance(node, StepNode):
@@ -103,7 +158,7 @@ class Workflow:
 class WorkflowEngine:
     """工作流执行引擎"""
 
-    def __init__(self, actions: Dict[str, Any] = None):
+    def __init__(self, actions: Optional[Dict[str, Any]] = None):
         """初始化
 
         Args:
@@ -151,17 +206,20 @@ class WorkflowEngine:
 
         ctx = ctx or {}
         context = {"params": dict(initial_params or {}), "results": {}}
-        run_record = {
+        errors_list: List[str] = []
+        run_record: Dict[str, Any] = {
             "workflow": workflow_name,
             "started_at": datetime.now().isoformat(),
             "results": {},
-            "errors": [],
+            "errors": errors_list,
+            "success": False,
+            "ended_at": "",
         }
 
         try:
             self._execute_topological(workflow, context, ctx, run_record)
         except Exception as e:
-            run_record["errors"].append(f"流程执行异常: {e}")
+            errors_list.append(f"流程执行异常: {e}")
 
         run_record["ended_at"] = datetime.now().isoformat()
         run_record["success"] = not run_record["errors"]
@@ -187,6 +245,8 @@ class WorkflowEngine:
                 for dep in node.depends_on:
                     successors.setdefault(dep, []).append(nid)
                     indegree[nid] += 1
+            elif isinstance(node, ParallelNode):
+                pass
 
         # 初始队列：入口节点 或 无依赖节点
         ready = [nid for nid in workflow.nodes
@@ -204,7 +264,7 @@ class WorkflowEngine:
                 continue
             executed.add(node_id)
 
-            node = workflow.nodes.get(node_id)
+            node = workflow.nodes.get(node_id)  # type: ignore[assignment]
             if not node:
                 continue
 
@@ -223,13 +283,12 @@ class WorkflowEngine:
                     node, workflow, context, ctx, run_record,
                     successors, indegree, ready, executed)
             elif isinstance(node, ParallelNode):
-                # 并行节点：释放所有分支依赖
+                # 并行节点：释放所有分支（后续拓扑排序会处理）
                 for branch in node.branches:
                     if branch in executed:
                         continue
-                    indegree[branch] = max(indegree.get(branch, 0) - 1, 0)
-                    if indegree.get(branch, 0) <= 0:
-                        ready.append(branch)
+                    # 手动将分支加入队列（并行执行）
+                    ready.append(branch)
 
     def _execute_condition_topological(self, node: ConditionNode, workflow: Workflow,
                                        context: Dict, ctx: Dict, run_record: Dict,

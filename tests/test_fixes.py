@@ -222,3 +222,38 @@ class TestToolFilterFunctions:
         # 恢复
         agent._restore_tools(original)
         assert registry.get_function("secret_func") is not None
+
+
+class TestSchedulerManagement:
+    """Scheduler 管理 API：list_tasks / remove_task / run_once_now"""
+
+    def test_list_tasks(self):
+        from agentorchestra.ontology.process.scheduler import Scheduler
+        sched = Scheduler()
+        sched.add_interval("i1", lambda p: None, interval_seconds=60)
+        sched.add_once("o1", lambda p: None, delay_seconds=5)
+        tasks = sched.list_tasks()
+        names = [t["name"] for t in tasks]
+        assert "i1" in names and "o1" in names
+        assert tasks[0]["type"] == "interval"
+
+    def test_remove_task(self):
+        from agentorchestra.ontology.process.scheduler import Scheduler
+        sched = Scheduler()
+        sched.add_interval("i1", lambda p: None, interval_seconds=60)
+        assert sched.remove_task("i1") is True
+        assert sched.remove_task("i1") is False  # 已删除
+        assert "i1" not in [t["name"] for t in sched.list_tasks()]
+
+    def test_run_once_now(self):
+        from agentorchestra.ontology.process.scheduler import Scheduler
+        sched = Scheduler()
+        calls = []
+        sched.add_interval("i1", lambda p: calls.append(1), interval_seconds=60)
+        result = sched.run_once_now("i1")
+        assert len(calls) == 1, "run_once_now 应立即执行一次"
+        assert result is None  # lambda 无返回值
+
+        import pytest
+        with pytest.raises(ValueError):
+            sched.run_once_now("不存在")

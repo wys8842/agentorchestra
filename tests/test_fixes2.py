@@ -43,12 +43,13 @@ class TestReActToolTruncation:
         assert len(result["preview"]) <= 10
 
     def test_run_impl_uses_truncator(self):
-        """验证 _run_impl 中截断逻辑存在（静态检查）"""
+        """验证 ReActAgent 工具执行链路使用截断逻辑（静态检查）"""
         import inspect
 
         from agentorchestra.agents.react_agent import ReActAgent
-        source = inspect.getsource(ReActAgent._run_impl)
-        # 同步主循环中应调用 truncator
+        from agentorchestra.core.agent import Agent
+        # _execute_single_tool_call 是基类公共方法，收敛了截断逻辑
+        source = inspect.getsource(Agent._execute_single_tool_call)
         assert "self.truncator" in source or "truncate" in source
 
 

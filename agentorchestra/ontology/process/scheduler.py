@@ -1,9 +1,8 @@
 """Scheduler - 调度器（定时触发动作/工作流）
 
-支持三种调度方式：
+支持两种调度方式：
 - interval: 固定间隔重复触发（如每 5 分钟）
 - once: 延迟一次触发（如 10 秒后）
-- cron_at: 到指定时刻触发（如 "14:30"）
 
 后台线程运行，可启动/停止/查询任务。
 """
@@ -20,7 +19,6 @@ class ScheduledTask:
     def __init__(self, name: str, target: Callable, schedule_type: str,
                  interval_seconds: Optional[float] = None,
                  delay_seconds: Optional[float] = None,
-                 at_time: Optional[str] = None,
                  params: Optional[Dict[str, Any]] = None,
                  max_runs: Optional[int] = None):
         """定义定时任务
@@ -28,10 +26,9 @@ class ScheduledTask:
         Args:
             name: 任务名
             target: 要执行的函数（无参或接收 params）
-            schedule_type: interval / once / cron_at
+            schedule_type: interval / once
             interval_seconds: interval 模式的间隔秒数
             delay_seconds: once 模式的延迟秒数
-            at_time: cron_at 模式的目标时刻（HH:MM）
             params: 传给 target 的参数
             max_runs: 最大执行次数（None=无限）
         """
@@ -40,7 +37,6 @@ class ScheduledTask:
         self.schedule_type = schedule_type
         self.interval_seconds = interval_seconds
         self.delay_seconds = delay_seconds
-        self.at_time = at_time
         self.params = params or {}
         self.max_runs = max_runs
         self.run_count = 0
@@ -70,16 +66,6 @@ class ScheduledTask:
             if self.last_run_at is not None:
                 return False
             return True  # 由调度器在延迟后触发
-
-        elif self.schedule_type == "cron_at":
-            if self.at_time is None:
-                return False
-            # 到目标时刻执行一次
-            target_time = self.at_time
-            current_time = now.strftime("%H:%M")
-            if current_time >= target_time and self.last_run_at is None:
-                return True
-            return False
 
         return False
 
@@ -115,14 +101,6 @@ class Scheduler:
                  params: Optional[Dict] = None) -> ScheduledTask:
         """添加一次性延迟任务"""
         task = ScheduledTask(name, target, "once", delay_seconds=delay_seconds,
-                             params=params, max_runs=1)
-        self._tasks[name] = task
-        return task
-
-    def add_cron_at(self, name: str, target: Callable, at_time: str,
-                    params: Optional[Dict] = None) -> ScheduledTask:
-        """添加到点执行任务"""
-        task = ScheduledTask(name, target, "cron_at", at_time=at_time,
                              params=params, max_runs=1)
         self._tasks[name] = task
         return task

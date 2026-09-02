@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ...core.utils import atomic_write, safe_json_load
 from ..base import Tool, ToolParameter
 from ..errors import ToolErrorCode
 from ..response import ToolResponse
@@ -353,12 +354,8 @@ class TodoWriteTool(Tool):
             "stats": self.current_todos.get_stats()
         }
 
-        # 原子写入
-        temp_path = filepath.with_suffix('.tmp')
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
-        temp_path.replace(filepath)
+        # 原子写入（临时文件 + 替换）
+        atomic_write(str(filepath), data, pretty=True)
 
     def load_todos(self, filepath: str):
         """从文件加载任务列表
@@ -366,8 +363,9 @@ class TodoWriteTool(Tool):
         Args:
             filepath: 任务列表文件路径
         """
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        data = safe_json_load(filepath)
+        if data is None:
+            raise FileNotFoundError(f"任务列表文件不存在或格式错误: {filepath}")
 
         todos = [
             TodoItem(

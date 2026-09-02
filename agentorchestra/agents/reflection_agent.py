@@ -1,7 +1,7 @@
 """Reflection Agent实现 - 自我反思与迭代优化的智能体"""
 
 import json
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional, cast
 
 from ..core.agent import Agent
 from ..core.config import Config
@@ -9,6 +9,7 @@ from ..core.lifecycle import LifecycleHook
 from ..core.llm import SymphonyLLM
 from ..core.message import Message
 from ..core.streaming import StreamEvent, StreamEventType
+from ..core.utils import parse_tool_arguments, serialize_tool_calls
 
 if TYPE_CHECKING:
     from ..tools.registry import ToolRegistry
@@ -64,7 +65,7 @@ class ReflectionAgent(Agent):
         llm: SymphonyLLM,
         system_prompt: Optional[str] = None,
         config: Optional[Config] = None,
-        max_iterations: int = 3,
+        max_steps: int = 3,
         tool_registry: Optional['ToolRegistry'] = None,
         enable_tool_calling: bool = True,
         max_tool_iterations: int = 3
@@ -77,7 +78,7 @@ class ReflectionAgent(Agent):
             llm: LLM实例
             system_prompt: 系统提示词（定义角色和反思策略）
             config: 配置对象
-            max_iterations: 最大迭代次数
+            max_steps: 最大迭代次数
             tool_registry: 工具注册表（可选）
             enable_tool_calling: 是否启用工具调用
             max_tool_iterations: 最大工具调用迭代次数
@@ -99,7 +100,7 @@ class ReflectionAgent(Agent):
             config,
             tool_registry=tool_registry
         )
-        self.max_iterations = max_iterations
+        self.max_steps = max_steps
         self.memory = Memory()
         self.enable_tool_calling = enable_tool_calling and tool_registry is not None
         self.max_tool_iterations = max_tool_iterations
@@ -126,8 +127,8 @@ class ReflectionAgent(Agent):
         self.memory.add_record("execution", initial_result)
 
         # 2. 迭代循环：反思与优化
-        for i in range(self.max_iterations):
-            print(f"\n--- 第 {i+1}/{self.max_iterations} 轮迭代 ---")
+        for i in range(self.max_steps):  # type: ignore[arg-type]
+            print(f"\n--- 第 {i+1}/{self.max_steps} 轮迭代 ---")
 
             # a. 反思
             print("\n-> 正在进行反思...")
@@ -156,16 +157,18 @@ class ReflectionAgent(Agent):
 
     def _execute_task(self, task: str, **kwargs) -> str:
         """执行初始任务"""
-        messages = [
-            {"role": "system", "content": self.system_prompt},
+        system_prompt = self.system_prompt or ""
+        messages: List[Dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"请完成以下任务：\n\n{task}"}
         ]
         return self._get_llm_response(messages, **kwargs)
 
     def _reflect_on_result(self, task: str, result: str, **kwargs) -> str:
         """对结果进行反思"""
-        messages = [
-            {"role": "system", "content": self.system_prompt},
+        system_prompt = self.system_prompt or ""
+        messages: List[Dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"""请仔细审查以下回答，并找出可能的问题或改进空间：
 
                 # 原始任务:
@@ -181,8 +184,9 @@ class ReflectionAgent(Agent):
 
     def _refine_result(self, task: str, last_attempt: str, feedback: str, **kwargs) -> str:
         """根据反馈优化结果"""
-        messages = [
-            {"role": "system", "content": self.system_prompt},
+        system_prompt = self.system_prompt or ""
+        messages: List[Dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"""请根据反馈意见改进你的回答：
 
                 # 原始任务:
@@ -212,7 +216,7 @@ class ReflectionAgent(Agent):
         # 如果没有启用工具调用，直接返回
         if not self.enable_tool_calling or not self.tool_registry:
             llm_response = self.llm.invoke(messages, **kwargs)
-            return llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            return cast(str, llm_response.content) if hasattr(llm_response, 'content') else str(llm_response)
 
         # 启用工具调用模式
         tool_schemas = self._build_tool_schemas()
@@ -244,17 +248,7 @@ class ReflectionAgent(Agent):
             messages.append({
                 "role": "assistant",
                 "content": response_message.content,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }
-                    }
-                    for tc in tool_calls
-                ]
+                "tool_calls": serialize_tool_calls(tool_calls)  # type: ignore[dict-item]
             })
 
             # 执行所有工具调用
@@ -263,7 +257,7 @@ class ReflectionAgent(Agent):
                 tool_call_id = tool_call.id
 
                 try:
-                    arguments = json.loads(tool_call.function.arguments)
+                    arguments = parse_tool_arguments(tool_call)
                 except json.JSONDecodeError as e:
                     print(f"❌ 工具参数解析失败: {e}")
                     messages.append({
@@ -273,24 +267,19 @@ class ReflectionAgent(Agent):
                     })
                     continue
 
-                # 执行工具（复用基类方法）
-                result = self._execute_tool_call(tool_name, arguments)
-
-                # 添加工具结果到消息
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": result
-                })
+                # 执行工具并处理结果（使用基类公共方法，收敛 6 处重复逻辑）
+                tool_result = self._execute_single_tool_call(
+                    tool_name, arguments, tool_call_id, current_iteration)
+                messages.append(tool_result)
 
         # 如果超过最大迭代次数，获取最后一次回答
         if current_iteration >= self.max_tool_iterations:
             llm_response = self.llm.invoke(messages, **kwargs)
-            return llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            return cast(str, llm_response.content) if hasattr(llm_response, 'content') else str(llm_response)
 
         return ""
 
-    async def arun_stream(
+    async def arun_stream(  # type: ignore[override]
         self,
         input_text: str,
         on_start: LifecycleHook = None,
@@ -362,7 +351,7 @@ class ReflectionAgent(Agent):
             # 阶段 2：反思与优化循环
             current_response = initial_response
 
-            for iteration in range(self.max_iterations):
+            for iteration in range(self.max_steps):  # type: ignore[arg-type]
                 # 反思阶段
                 yield StreamEvent.create(
                     StreamEventType.STEP_START,
@@ -372,7 +361,7 @@ class ReflectionAgent(Agent):
                     description=f"第 {iteration + 1} 次反思"
                 )
 
-                reflection_prompt = self._build_reflection_prompt(input_text, current_response)
+                reflection_prompt = self._build_reflection_prompt(input_text, current_response)  # type: ignore[attr-defined]
                 reflection_messages = [{"role": "user", "content": reflection_prompt}]
 
                 reflection = ""
@@ -403,7 +392,7 @@ class ReflectionAgent(Agent):
                     description=f"第 {iteration + 1} 次优化"
                 )
 
-                refinement_prompt = self._build_refinement_prompt(
+                refinement_prompt = self._build_refinement_prompt(  # type: ignore[attr-defined]
                     input_text,
                     current_response,
                     reflection
@@ -436,7 +425,7 @@ class ReflectionAgent(Agent):
                 StreamEventType.AGENT_FINISH,
                 self.name,
                 result=current_response,
-                total_iterations=self.max_iterations
+                total_iterations=self.max_steps
             )
 
             # 保存到历史

@@ -1,23 +1,23 @@
-"""ObjectIndex - 对象索引（对标 Palantir Object Storage 索引）
+"""ObjectIndex - 对象索引
 
 提供对象搜索、过滤、聚合能力。
 ObjectStore 依赖它做查询优化。
 
-存储通过 StorageBackend 抽象（内存/SQLite），上层无感知。
+存储通过 BaseStorageBackend 抽象（内存/SQLite），上层无感知。
 """
 
 from typing import Any, Dict, List, Optional
 
-from .backends import MemoryBackend, StorageBackend
+from .backends import BaseStorageBackend, MemoryBackend
 
 
 class ObjectIndex:
     """对象索引"""
 
-    def __init__(self, backend: Optional[StorageBackend] = None):
+    def __init__(self, backend: Optional[BaseStorageBackend] = None):
         self.backend = backend or MemoryBackend()
         # 反向索引（内存中维护，加速等值过滤）
-        self._inverted: Dict[str, Dict[str, Dict[str, List[str]]]] = {}
+        self._inverted: Dict[str, Dict[str, Dict[str, set[str]]]] = {}
 
     @property
     def backend_type(self) -> str:
@@ -45,7 +45,8 @@ class ObjectIndex:
     def update_object(self, type_name: str, pk: str, obj: Dict[str, Any]) -> None:
         self.index_object(type_name, pk, obj)
 
-    def remove_object(self, type_name: str, pk: str) -> None:
+    def remove_object(self, type_name: str, pk: str) -> Optional[Dict[str, Any]]:
+        """删除对象并返回被删对象（不存在返回 None）"""
         obj = self.backend.delete(type_name, pk)
         if obj:
             inv = self._inverted.get(type_name, {})
@@ -53,6 +54,9 @@ class ObjectIndex:
                 bucket = inv.get(prop, {}).get(str(value))
                 if bucket:
                     bucket.discard(pk)
+                    if not bucket:
+                        del inv[prop][str(value)]
+        return obj
 
     # ==================== 查询 ====================
 

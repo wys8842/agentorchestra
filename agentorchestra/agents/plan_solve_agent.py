@@ -1,7 +1,7 @@
 """Plan and Solve Agent实现 - 分解规划与逐步执行的智能体"""
 
 import json
-from typing import TYPE_CHECKING, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional, cast
 
 from ..core.agent import Agent
 from ..core.config import Config
@@ -9,9 +9,159 @@ from ..core.lifecycle import LifecycleHook
 from ..core.llm import SymphonyLLM
 from ..core.message import Message
 from ..core.streaming import StreamEvent, StreamEventType
+from ..core.utils import parse_tool_arguments, serialize_tool_calls
 
 if TYPE_CHECKING:
     from ..tools.registry import ToolRegistry
+
+
+def _build_tool_schemas_from_registry(tool_registry: 'ToolRegistry') -> List[Dict[str, Any]]:
+    """从工具注册表构建工具 JSON Schema（模块级函数，供 Executor 使用）"""
+    if not tool_registry:
+        return []
+
+    schemas: List[Dict[str, Any]] = []
+
+    for tool in tool_registry.get_all_tools():
+        properties: Dict[str, Any] = {}
+        required: List[str] = []
+
+        try:
+            parameters = tool.get_parameters()
+        except Exception:
+            parameters = []
+
+        for param in parameters:
+            properties[param.name] = {
+                "type": _map_parameter_type(param.type),
+                "description": param.description or ""
+            }
+            if param.default is not None:
+                properties[param.name]["default"] = param.default
+            if getattr(param, "required", True):
+                required.append(param.name)
+
+        schema: Dict[str, Any] = {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description or "",
+                "parameters": {
+                    "type": "object",
+                    "properties": properties
+                }
+            }
+        }
+        if required:
+            schema["function"]["parameters"]["required"] = required
+        schemas.append(schema)
+
+    function_map = getattr(tool_registry, "_functions", {})
+    for name, info in function_map.items():
+        schemas.append({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": info.get("description", ""),
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        })
+
+    return schemas
+
+
+def _map_parameter_type(param_type: str) -> str:
+    """映射参数类型到 JSON Schema 类型"""
+    type_mapping = {
+        "string": "string",
+        "str": "string",
+        "integer": "integer",
+        "int": "integer",
+        "number": "number",
+        "float": "number",
+        "boolean": "boolean",
+        "bool": "boolean",
+        "array": "array",
+        "list": "array",
+        "object": "object",
+        "dict": "object",
+    }
+    return type_mapping.get(param_type.lower(), "string")
+
+
+def _execute_tool_call_from_registry(
+    registry: 'ToolRegistry',
+    tool_name: str,
+    arguments: Dict[str, Any]
+) -> str:
+    """执行工具调用并返回字符串结果（模块级函数，供 Executor 使用）
+
+    统一的工具执行逻辑：
+    - 熔断检查、观测埋点统一由 registry.execute_tool 完成
+    - 本函数只负责参数类型转换与响应格式化
+
+    Args:
+        registry: 工具注册表
+        tool_name: 工具名称
+        arguments: 工具参数
+
+    Returns:
+        工具执行结果（字符串格式）
+    """
+    if not registry:
+        return "❌ 错误：未配置工具注册表"
+
+    tool = registry.get_tool(tool_name)
+    if tool is not None:
+        try:
+            parameters = tool.get_parameters()
+        except Exception:
+            parameters = []
+        type_mapping = {param.name: param.type for param in parameters}
+        converted: Dict[str, Any] = {}
+        for key, value in arguments.items():
+            param_type = type_mapping.get(key)
+            if not param_type:
+                converted[key] = value
+                continue
+            try:
+                normalized = param_type.lower()
+                if normalized in {"number", "float"}:
+                    converted[key] = float(value)
+                elif normalized in {"integer", "int"}:
+                    converted[key] = int(value)
+                elif normalized in {"boolean", "bool"}:
+                    if isinstance(value, bool):
+                        converted[key] = value
+                    elif isinstance(value, (int, float)):
+                        converted[key] = bool(value)
+                    elif isinstance(value, str):
+                        converted[key] = value.lower() in ("true", "1", "yes")
+                    else:
+                        converted[key] = bool(value)
+                else:
+                    converted[key] = str(value)
+            except (ValueError, TypeError):
+                converted[key] = str(value)
+        arguments = converted
+
+    try:
+        response = registry.execute_tool(tool_name, arguments)  # type: ignore[arg-type]
+    except Exception as exc:
+        return f"❌ 工具调用失败：{exc}"
+
+    from ..tools.response import ToolStatus
+    if response.status == ToolStatus.ERROR:
+        error_code = response.error_info.get("code", "UNKNOWN") if response.error_info else "UNKNOWN"
+        return f"❌ 错误 [{error_code}]: {response.text}"
+    elif response.status == ToolStatus.PARTIAL:
+        return f"⚠️ 部分成功: {response.text}"
+    else:
+        return response.text
+
 
 class Planner:
     """规划器 - 负责将复杂问题分解为简单步骤（使用 Function Calling）"""
@@ -92,7 +242,7 @@ class Planner:
             # 提取工具调用结果
             if response_message.tool_calls:
                 tool_call = response_message.tool_calls[0]
-                arguments = json.loads(tool_call.function.arguments)
+                arguments = parse_tool_arguments(tool_call)
                 plan = arguments.get("steps", [])
 
                 print("✅ 计划已生成:")
@@ -138,7 +288,7 @@ class Executor:
         Returns:
             最终答案
         """
-        history = []
+        history: List[Dict[str, Any]] = []
         final_answer = ""
 
         print("\n--- 正在执行计划 ---")
@@ -189,7 +339,7 @@ class Executor:
         Returns:
             步骤执行结果
         """
-        messages = [
+        messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": context}
         ]
@@ -197,17 +347,10 @@ class Executor:
         # 如果没有启用工具调用，直接返回
         if not self.enable_tool_calling or not self.tool_registry:
             llm_response = self.llm_client.invoke(messages, **kwargs)
-            return llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            return cast(str, llm_response.content) if hasattr(llm_response, 'content') else str(llm_response)
 
-        # 启用工具调用模式
-        from .simple_agent import SimpleAgent
-        # 临时创建一个 SimpleAgent 实例来复用工具调用逻辑
-        temp_agent = SimpleAgent(
-            name="temp_executor",
-            llm=self.llm_client,
-            tool_registry=self.tool_registry
-        )
-        tool_schemas = temp_agent._build_tool_schemas()
+        # 启用工具调用模式 - 直接从注册表构建 schema，不创建临时 Agent
+        tool_schemas = _build_tool_schemas_from_registry(self.tool_registry)
 
         current_iteration = 0
 
@@ -237,17 +380,7 @@ class Executor:
             messages.append({
                 "role": "assistant",
                 "content": response_message.content,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }
-                    }
-                    for tc in tool_calls
-                ]
+                "tool_calls": serialize_tool_calls(tool_calls)
             })
 
             # 执行所有工具调用
@@ -256,7 +389,7 @@ class Executor:
                 tool_call_id = tool_call.id
 
                 try:
-                    arguments = json.loads(tool_call.function.arguments)
+                    arguments = parse_tool_arguments(tool_call)
                 except json.JSONDecodeError as e:
                     print(f"❌ 工具参数解析失败: {e}")
                     messages.append({
@@ -266,8 +399,9 @@ class Executor:
                     })
                     continue
 
-                # 执行工具（复用基类方法）
-                result = temp_agent._execute_tool_call(tool_name, arguments)
+                # 执行工具（使用模块级函数，替代临时 Agent 模式）
+                result = _execute_tool_call_from_registry(
+                    self.tool_registry, tool_name, arguments)
 
                 # 添加工具结果到消息
                 messages.append({
@@ -279,7 +413,7 @@ class Executor:
         # 如果超过最大迭代次数，获取最后一次回答
         if current_iteration >= self.max_tool_iterations:
             llm_response = self.llm_client.invoke(messages, **kwargs)
-            return llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            return cast(str, llm_response.content) if hasattr(llm_response, 'content') else str(llm_response)
 
         return ""
 
@@ -352,7 +486,26 @@ class PlanSolveAgent(Agent):
         Returns:
             最终答案
         """
+        from datetime import datetime
+
         print(f"\n🤖 {self.name} 开始处理问题: {input_text}")
+
+        # 记录会话开始
+        if self.trace_logger:
+            self.trace_logger.log_event(
+                "session_start",
+                {
+                    "agent_name": self.name,
+                    "agent_type": self.__class__.__name__,
+                }
+            )
+
+        # 记录用户消息
+        if self.trace_logger:
+            self.trace_logger.log_event(
+                "message_written",
+                {"role": "user", "content": input_text}
+            )
 
         # 1. 生成计划
         plan = self.planner.plan(input_text, **kwargs)
@@ -364,6 +517,16 @@ class PlanSolveAgent(Agent):
             self.add_message(Message(input_text, "user"))
             self.add_message(Message(final_answer, "assistant"))
 
+            if self.trace_logger:
+                self.trace_logger.log_event(
+                    "session_end",
+                    {
+                        "status": "failed",
+                        "final_answer": final_answer,
+                    }
+                )
+                self.trace_logger.finalize()
+
             return final_answer
 
         # 2. 执行计划
@@ -374,9 +537,19 @@ class PlanSolveAgent(Agent):
         self.add_message(Message(input_text, "user"))
         self.add_message(Message(final_answer, "assistant"))
 
+        if self.trace_logger:
+            self.trace_logger.log_event(
+                "session_end",
+                {
+                    "status": "success",
+                    "final_answer": final_answer,
+                }
+            )
+            self.trace_logger.finalize()
+
         return final_answer
 
-    async def arun_stream(
+    async def arun_stream(  # type: ignore[override]
         self,
         input_text: str,
         on_start: LifecycleHook = None,
@@ -451,7 +624,7 @@ class PlanSolveAgent(Agent):
             )
 
             # 阶段 2：执行计划
-            step_results = []
+            step_results: List[str] = []
 
             for i, step_description in enumerate(plan):
                 step_num = i + 1

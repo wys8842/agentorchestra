@@ -1,4 +1,4 @@
-"""Materialization - 物化（对标 Palantir Materializations）
+"""Materialization - 物化
 
 把对象编辑结果回写到数据源，形成"编辑 → 物化"闭环。
 支持注册自定义数据源回写函数。

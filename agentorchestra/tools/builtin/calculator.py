@@ -44,7 +44,8 @@ class CalculatorTool(Tool):
     def __init__(self):
         super().__init__(
             name="python_calculator",
-            description="执行数学计算。支持基本运算、数学函数等。例如：2+3*4, sqrt(16), sin(pi/2)等。"
+            description="执行数学计算。支持基本运算、数学函数等。例如：2+3*4, sqrt(16), sin(pi/2)等。",
+            read_only=True
         )
 
     def run(self, parameters: Dict[str, Any]) -> ToolResponse:
@@ -141,8 +142,8 @@ class CalculatorTool(Tool):
             )
         ]
 
-# 便捷函数
-def calculate(expression: str) -> str:
+
+def calculate(expression: str) -> ToolResponse:
     """
     执行数学计算
 
@@ -154,3 +155,5 @@ def calculate(expression: str) -> str:
     """
     tool = CalculatorTool()
     return tool.run({"input": expression})
+
+

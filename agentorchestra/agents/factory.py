@@ -29,6 +29,7 @@ def create_agent(
             - "reflection": ReflectionAgent（反思型）
             - "plan": PlanAndSolveAgent（规划-执行）
             - "simple": SimpleAgent（简单对话）
+            - "loop": LoopAgent（循环执行）
         name: Agent 名称
         llm: LLM 实例
         tool_registry: 工具注册表（可选）
@@ -82,10 +83,20 @@ def create_agent(
             system_prompt=system_prompt
         )
 
+    elif agent_type == "loop":
+        from .loop_agent import LoopAgent
+        return LoopAgent(
+            name=name,
+            llm=llm,
+            tool_registry=tool_registry,
+            config=config,
+            system_prompt=system_prompt
+        )
+
     else:
         raise ValueError(
             f"不支持的 agent_type: {agent_type}。"
-            f"支持的类型: react, reflection, plan, simple"
+            f"支持的类型: react, reflection, plan, simple, loop"
         )
 
 
@@ -178,6 +189,16 @@ def _get_system_prompt_for_type(agent_type: str) -> str:
 - 保持回答简洁
 - 直接给出结果
 - 避免冗余信息
+""",
+        "loop": """你是一个循环执行专家。
+
+目标：通过多次工具调用循环直到任务完成。
+
+规则：
+- 使用工具获取信息或执行操作
+- 根据工具返回结果决定下一步
+- 循环直到获得最终答案
+- 最大循环次数由调用方指定
 """
     }
 

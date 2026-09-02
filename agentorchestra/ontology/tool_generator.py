@@ -48,13 +48,13 @@ class ObjectQueryTool(Tool):
 
     def get_parameters(self) -> List[ToolParameter]:
         return [
-            ToolParameter("mode", "string", "查询模式: get/search/filter/list/aggregate/links", True),
-            ToolParameter("pk", "string", "主键值（get/links 用）", False),
-            ToolParameter("query", "string", "搜索关键词（search）", False),
-            ToolParameter("conditions", "string", "过滤条件 JSON（filter）", False),
-            ToolParameter("group_by", "string", "分组字段（aggregate）", False),
-            ToolParameter("agg", "string", "聚合函数（aggregate）", False),
-            ToolParameter("link_name", "string", "链接名（links）", False),
+            ToolParameter(name="mode", type="string", description="查询模式: get/search/filter/list/aggregate/links", required=True),
+            ToolParameter(name="pk", type="string", description="主键值（get/links 用）", required=False),
+            ToolParameter(name="query", type="string", description="搜索关键词（search）", required=False),
+            ToolParameter(name="conditions", type="string", description="过滤条件 JSON（filter）", required=False),
+            ToolParameter(name="group_by", type="string", description="分组字段（aggregate）", required=False),
+            ToolParameter(name="agg", type="string", description="聚合函数（aggregate）", required=False),
+            ToolParameter(name="link_name", type="string", description="链接名（links）", required=False),
         ]
 
     def run(self, parameters: Dict[str, Any]) -> ToolResponse:
@@ -157,8 +157,8 @@ class ObjectActionTool(Tool):
         )
 
     def get_parameters(self) -> List[ToolParameter]:
-        return [ToolParameter(p.name, p.type, p.description or p.name,
-                              p.required, p.default)
+        return [ToolParameter(name=p.name, type=p.type, description=p.description or p.name,
+                              required=p.required, default=p.default)
                 for p in self.action.get_parameters()]
 
     def run(self, parameters: Dict[str, Any]) -> ToolResponse:
@@ -221,8 +221,8 @@ class FunctionCallTool(Tool):
         return "".join(p[0].upper() + p[1:] for p in name.split("_") if p)
 
     def get_parameters(self) -> List[ToolParameter]:
-        return [ToolParameter(a.name, a.type, a.description or a.name,
-                              a.required, a.default)
+        return [ToolParameter(name=a.name, type=a.type, description=a.description or a.name,
+                              required=a.required, default=a.default)
                 for a in self.function.get_arguments()]
 
     def run(self, parameters: Dict[str, Any]) -> ToolResponse:

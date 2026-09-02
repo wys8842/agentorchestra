@@ -6,7 +6,7 @@ from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union
 
 from .exceptions import SymphonyException
 from .llm_adapters import BaseLLMAdapter, create_adapter
-from .llm_response import LLMResponse, StreamStats
+from .llm_response import LLMResponse
 
 
 class SymphonyLLM:
@@ -77,6 +77,11 @@ class SymphonyLLM:
         if not self.base_url:
             raise SymphonyException("必须提供服务地址（base_url参数或LLM_BASE_URL环境变量）")
 
+        # 确保类型正确（通过验证后不可能为 None）
+        assert self.model is not None
+        assert self.api_key is not None
+        assert self.base_url is not None
+
         # 创建适配器（自动检测）
         self._adapter: BaseLLMAdapter = create_adapter(
             api_key=self.api_key,
@@ -86,7 +91,7 @@ class SymphonyLLM:
         )
 
         # 最后一次调用的统计信息（用于流式调用）
-        self.last_call_stats: Optional[StreamStats] = None
+        self.last_call_stats: Optional[LLMResponse] = None
 
         # 可观测性：日志 + 指标
         from .logging import get_logger
@@ -112,7 +117,7 @@ class SymphonyLLM:
         Note:
             流式调用结束后，可通过 llm.last_call_stats 获取统计信息
         """
-        print(f"🧠 正在调用 {self.model} 模型...")
+        self.logger.info(f"正在调用 {self.model} 模型...")
 
         # 准备参数
         kwargs = {
@@ -123,17 +128,16 @@ class SymphonyLLM:
 
         try:
             for chunk in self._adapter.stream_invoke(messages, **kwargs):
-                print(chunk, end="", flush=True)
+                self.logger.debug(f"LLM chunk: {chunk}")
                 yield chunk
-            print()  # 换行
-            print("✅ 大语言模型响应成功")
+            self.logger.info("大语言模型响应成功")
 
             # 保存统计信息
             if hasattr(self._adapter, 'last_stats'):
                 self.last_call_stats = self._adapter.last_stats
 
         except Exception as e:
-            print(f"❌ 调用LLM API时发生错误: {e}")
+            self.logger.error(f"调用LLM API时发生错误: {e}")
             raise
 
     def invoke(self, messages: List[Dict[str, str]], **kwargs) -> LLMResponse:
@@ -173,7 +177,7 @@ class SymphonyLLM:
             except Exception as e:
                 span.set_error()
                 span.set_attribute("error", str(e))
-                self.metrics.record_llm_call(self.model, self.provider, 0, 0)
+                self.metrics.record_llm_call(self.model, self.provider, 0, 0)  # type: ignore[arg-type]
                 self.logger.exception("LLM 调用失败", extra={"model": self.model})
                 raise
 
@@ -183,7 +187,7 @@ class SymphonyLLM:
                 tokens = response.usage.get("total_tokens", 0)
             span.set_attribute("tokens", tokens)
             span.set_attribute("duration_ms", round(latency_ms, 1))
-            self.metrics.record_llm_call(self.model, self.provider, tokens, latency_ms)
+            self.metrics.record_llm_call(self.model, self.provider, tokens, latency_ms)  # type: ignore[arg-type]
             self.logger.info("LLM 调用完成", extra={
                 "model": self.model, "duration_ms": round(latency_ms, 1),
                 "tokens": tokens})
@@ -266,7 +270,7 @@ class SymphonyLLM:
             except Exception as e:
                 span.set_error()
                 span.set_attribute("error", str(e))
-                self.metrics.record_llm_call(self.model, self.provider, 0, 0)
+                self.metrics.record_llm_call(self.model, self.provider, 0, 0)  # type: ignore[arg-type]
                 self.logger.exception("LLM 工具调用失败", extra={"model": self.model})
                 raise
 
@@ -279,7 +283,7 @@ class SymphonyLLM:
                 pass
             span.set_attribute("tokens", tokens)
             span.set_attribute("duration_ms", round(latency_ms, 1))
-            self.metrics.record_llm_call(self.model, self.provider, tokens, latency_ms)
+            self.metrics.record_llm_call(self.model, self.provider, tokens, latency_ms)  # type: ignore[arg-type]
             self.logger.info("LLM 工具调用完成", extra={
                 "model": self.model, "duration_ms": round(latency_ms, 1),
                 "tokens": tokens})

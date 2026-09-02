@@ -26,6 +26,8 @@ class Config(BaseModel):
     compression_threshold: float = 0.8  # 压缩阈值（0.8 = 80%时触发压缩）
     min_retain_rounds: int = 10  # 压缩时保留的最小完整轮次数
     enable_smart_compression: bool = False  # 是否启用智能摘要（需要额外LLM调用）
+    context_builder_enabled: bool = False  # 是否启用 GSSC 上下文构建器（融合多路信息）
+    context_builder_max_tokens: int = 8000  # GSSC 上下文总预算（tokens）
 
     # 智能摘要配置
     summary_llm_provider: str = "deepseek"  # 摘要专用 LLM 提供商
@@ -54,11 +56,13 @@ class Config(BaseModel):
     mcp_enabled: bool = False  # 是否启用 MCP 工具
     mcp_config_file: str = "mcp.json"  # MCP Server 配置文件路径
 
-    # 企业级 Ontology 配置（对标 Palantir）
+    # 企业级 Ontology 配置
     ontology_engine_enabled: bool = False  # 是否启用企业级 Ontology 引擎
     ontology_engine_module: str = ""  # 可选：用户定义的 Ontology 装配模块（含 build_engine()）
     ontology_default_principal: str = "agent"  # 默认安全主体
     ontology_default_roles: list = []  # 默认角色列表
+    ontology_backend: str = "memory"  # 对象存储后端: memory/sqlite
+    ontology_db_path: str = "memory/ontology.db"  # SQLite 后端数据库文件路径
 
     # 熔断器配置
     circuit_enabled: bool = True  # 是否启用熔断器

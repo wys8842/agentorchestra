@@ -1,4 +1,4 @@
-"""Audit - 审计（对标 Palantir Action log）
+"""Audit - 审计
 
 记录谁在何时对什么资源执行了什么操作。
 """
@@ -14,7 +14,7 @@ class AuditManager:
         self._log: List[Dict[str, Any]] = []
 
     def log(self, principal: str, resource: str, action: str,
-            detail: Dict[str, Any] = None, success: bool = True) -> None:
+            detail: Optional[Dict[str, Any]] = None, success: bool = True) -> None:
         self._log.append({
             "timestamp": datetime.now().isoformat(),
             "principal": principal,

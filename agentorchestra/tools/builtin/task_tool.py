@@ -3,14 +3,16 @@
 允许主 Agent 启动子代理处理子任务，实现上下文隔离。
 """
 
+import time
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from ...core.agent import Agent
 from ...core.config import Config
+from ...core.utils import measure_elapsed_ms, truncate_text
 from ..base import Tool, ToolParameter
 from ..errors import ToolErrorCode
 from ..response import ToolResponse
-from ..tool_filter import FullAccessFilter, ReadOnlyFilter, ToolFilter
+from ..tool_filter import BaseToolFilter, FullAccessFilter, ReadOnlyFilter
 
 if TYPE_CHECKING:
     from ...tools.registry import ToolRegistry
@@ -90,7 +92,6 @@ class TaskTool(Tool):
         Returns:
             ToolResponse 对象
         """
-        import time
         start_time = time.time()
 
         # 1. 解析参数
@@ -113,7 +114,7 @@ class TaskTool(Tool):
             tool_filter = self._create_tool_filter(tool_filter_type)
 
             # 4. 运行子代理（隔离模式）
-            print(f"\n[SubAgent-{agent_type}] 开始执行: {task[:50]}...")
+            print(f"\n[SubAgent-{agent_type}] 开始执行: {truncate_text(task, 50)}")
 
             result = subagent.run_as_subagent(
                 task=task,
@@ -123,7 +124,7 @@ class TaskTool(Tool):
             )
 
             # 5. 计算执行时间
-            elapsed_ms = int((time.time() - start_time) * 1000)
+            elapsed_ms = measure_elapsed_ms(start_time)
 
             # 6. 返回标准 ToolResponse
             if result["success"]:
@@ -165,14 +166,14 @@ class TaskTool(Tool):
                 message=f"子代理执行失败: {str(e)}"
             )
 
-    def _create_tool_filter(self, filter_type: str) -> Optional[ToolFilter]:
+    def _create_tool_filter(self, filter_type: str) -> Optional[BaseToolFilter]:
         """创建工具过滤器
 
         Args:
             filter_type: 过滤器类型
 
         Returns:
-            ToolFilter 实例或 None
+            BaseToolFilter 实例或 None
         """
         if filter_type == "readonly":
             return ReadOnlyFilter()

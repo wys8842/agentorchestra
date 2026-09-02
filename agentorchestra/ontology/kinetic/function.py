@@ -1,4 +1,4 @@
-"""Function - 函数（对标 Palantir Function）
+"""Function - 函数
 
 动能层：业务逻辑，任意复杂度。
 - Function: 带参数和返回值的业务逻辑
@@ -35,7 +35,7 @@ class Function:
     def get_arguments(self) -> List[ToolParameter]:
         return list(self.arguments.values())
 
-    def call(self, args: Dict[str, Any], ctx: Dict[str, Any] = None) -> Any:
+    def call(self, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Any:
         return self.impl(args or {}, ctx or {})
 
     def to_dict(self) -> Dict[str, Any]:

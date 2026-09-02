@@ -7,10 +7,11 @@
 
 import json
 import re
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from ..core.utils import duration_seconds, generate_session_id
 
 
 class TraceLogger:
@@ -47,7 +48,7 @@ class TraceLogger:
         self.html_include_raw = html_include_raw_response
 
         # 生成会话 ID
-        self.session_id = self._generate_session_id()
+        self.session_id = generate_session_id()
 
         # 事件缓存（用于生成统计和最终 HTML）
         self._events: List[Dict] = []
@@ -70,16 +71,6 @@ class TraceLogger:
 
         # 写入 HTML 头部
         self._write_html_header()
-
-    def _generate_session_id(self) -> str:
-        """生成会话 ID
-
-        格式: s-YYYYMMDD-HHMMSS-xxxx
-        示例: s-20250118-143052-a3f2
-        """
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        random_suffix = uuid.uuid4().hex[:4]
-        return f"s-{timestamp}-{random_suffix}"
 
     def log_event(
         self,
@@ -196,18 +187,20 @@ class TraceLogger:
         Returns:
             统计数据字典
         """
-        stats = {
+        tool_calls_dict: Dict[str, int] = {}
+        errors_list: List[Dict[str, Any]] = []
+        stats: Dict[str, Any] = {
             "total_steps": 0,
             "total_tokens": 0,
             "total_cost": 0.0,
-            "tool_calls": {},  # {tool_name: count}
-            "errors": [],
+            "tool_calls": tool_calls_dict,
+            "errors": errors_list,
             "duration_seconds": 0.0,
             "model_calls": 0,
         }
 
-        session_start = None
-        session_end = None
+        session_start: Optional[datetime] = None
+        session_end: Optional[datetime] = None
 
         for event in self._events:
             # 会话时长
@@ -218,23 +211,23 @@ class TraceLogger:
 
             # 步骤数
             if event.get("step"):
-                stats["total_steps"] = max(stats["total_steps"], event["step"])
+                stats["total_steps"] = max(stats["total_steps"], event["step"])  # type: ignore[arg-type]
 
             # Token 统计
             if event["event"] == "model_output":
-                usage = event.get("payload", {}).get("usage", {})
-                stats["total_tokens"] += usage.get("total_tokens", 0)
-                stats["total_cost"] += usage.get("cost", 0.0)
-                stats["model_calls"] += 1
+                usage: Dict[str, Any] = event.get("payload", {}).get("usage", {})
+                stats["total_tokens"] += usage.get("total_tokens", 0)  # type: ignore[arg-type]
+                stats["total_cost"] += usage.get("cost", 0.0)  # type: ignore[arg-type]
+                stats["model_calls"] += 1  # type: ignore[arg-type]
 
             # 工具调用统计
             if event["event"] == "tool_call":
                 tool_name = event["payload"].get("tool_name", "unknown")
-                stats["tool_calls"][tool_name] = stats["tool_calls"].get(tool_name, 0) + 1
+                tool_calls_dict[tool_name] = tool_calls_dict.get(tool_name, 0) + 1
 
             # 错误统计
             if event["event"] == "error":
-                stats["errors"].append({
+                errors_list.append({
                     "step": event.get("step"),
                     "type": event["payload"].get("error_type"),
                     "message": event["payload"].get("message")
@@ -242,7 +235,7 @@ class TraceLogger:
 
         # 计算时长
         if session_start and session_end:
-            stats["duration_seconds"] = (session_end - session_start).total_seconds()
+            stats["duration_seconds"] = duration_seconds(session_start, session_end)
 
         return stats
 

@@ -1,4 +1,4 @@
-"""QueryEngine - 查询引擎（对标 Palantir Object Set Service）
+"""QueryEngine - 查询引擎
 
 跨对象类型查询：
 - 通过接口查询所有实现类型
@@ -56,14 +56,13 @@ class QueryEngine:
     def describe_join(self, type_a: str, link_name: str,
                       type_b: str, conditions_a: Optional[Dict] = None) -> List[Dict]:
         """对象 join 查询：从 A 对象沿链接找关联 B 对象"""
-        results = []
+        results: List[Dict[str, Any]] = []
+        a_type = self.store.get_type(type_a)
+        if a_type is None:
+            return results
         for a in self.store.list_objects(type_a):
-            if conditions_a:
-                a_type = self.store.get_type(type_a)
-                pk = str(a.get(a_type.primary_key))
-                if not self._matches(a, conditions_a):
-                    continue
-            a_type = self.store.get_type(type_a)
+            if conditions_a and not self._matches(a, conditions_a):
+                continue
             pk = str(a.get(a_type.primary_key))
             links = self.store.get_links(type_a, pk, link_name)
             for link in links:

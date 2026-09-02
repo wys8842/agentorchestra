@@ -1,17 +1,20 @@
 """Agent基类"""
 
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 from .config import Config
+from .logging import get_logger
 from .lifecycle import AgentEvent, EventType, LifecycleHook
 from .llm import SymphonyLLM
 from .message import Message
+from .utils import duration_seconds, generate_session_id, truncate_text
 
 if TYPE_CHECKING:
     from ..tools.registry import ToolRegistry
-    from ..tools.tool_filter import ToolFilter
+    from ..tools.tool_filter import BaseToolFilter
 
 
 class Agent(ABC):
@@ -28,6 +31,9 @@ class Agent(ABC):
     - self._history 属性仍然可用（通过 property 代理）
     - add_message/clear_history/get_history 方法保持不变
     """
+
+    logger: logging.Logger  # Type annotation for logger
+    max_steps: Optional[int] = None  # May be set by subclasses
 
     def __init__(
         self,
@@ -63,8 +69,25 @@ class Agent(ABC):
 
         # 新增：Token 计数器（缓存 + 增量计算）
         from ..context.token_counter import TokenCounter
-        self.token_counter = TokenCounter(model=self.llm.model)
+        model_name = self.llm.model
+        if model_name is None:
+            model_name = "unknown"
+        self.token_counter = TokenCounter(model=model_name)
         self._history_token_count = 0  # 缓存历史 Token 数
+
+        # 新增：GSSC 上下文构建器（可选，融合多路信息到上下文）
+        # 通过 context_builder_enabled 开启；依赖 tiktoken（可选安装）
+        self.context_builder: Optional[Any] = None
+        if self.config.context_builder_enabled:
+            try:
+                from ..context.builder import ContextBuilder, ContextConfig
+                self.context_builder = ContextBuilder(
+                    config=ContextConfig(max_tokens=self.config.context_builder_max_tokens)
+                )
+            except Exception as e:
+                if self.config.debug:
+                    self.logger.warning(f"GSSC 上下文构建器未启用: {e}")
+                self.context_builder = None
 
         # 新增：可观测性组件
         from agentorchestra.observability import TraceLogger
@@ -86,6 +109,9 @@ class Agent(ABC):
                 }
             )
 
+        # 日志器
+        self.logger = get_logger("core.agent")
+
         # 新增：Skills 知识外化组件
         from pathlib import Path
 
@@ -103,18 +129,16 @@ class Agent(ABC):
                 self.tool_registry.register_tool(skill_tool)
 
         # 新增：MCP (Model Context Protocol) 组件
-        self.mcp_manager: Optional[Any] = None
         if self.config.mcp_enabled and self.tool_registry:
             try:
                 from agentorchestra.tools.builtin.mcp_tool import MCPServerManager
-                self.mcp_manager = MCPServerManager(config_file=self.config.mcp_config_file)
-                for tool in self.mcp_manager.connect_all():
+                mcp_manager = MCPServerManager(config_file=self.config.mcp_config_file)
+                for tool in mcp_manager.connect_all():
                     self.tool_registry.register_tool(tool)
             except ImportError as e:
-                # mcp 依赖未安装，不阻塞 Agent 初始化
-                print(f"⚠️ 警告：MCP 工具未启用（{e}）")
+                self.logger.warning(f"MCP 工具未启用（{e}）")
 
-        # 新增：企业级 Ontology 引擎组件（对标 Palantir）
+        # 新增：企业级 Ontology 引擎组件
         # 通过 engine.mount(registry) 解耦挂载，不依赖 Agent 具体类型
         self.ontology_engine: Optional[Any] = None
         if self.config.ontology_engine_enabled and self.tool_registry:
@@ -128,18 +152,34 @@ class Agent(ABC):
                     module = importlib.import_module(self.config.ontology_engine_module)
                     self.ontology_engine = module.build_engine()
                 else:
+                    # 按配置选择对象存储后端
+                    from agentorchestra.ontology.storage.backends import (
+                        BaseStorageBackend,
+                        MemoryBackend,
+                        SQLiteBackend,
+                    )
+                    from agentorchestra.ontology.storage.graph_store import GraphStore
+                    from agentorchestra.ontology.storage.object_store import ObjectStore
+
+                    backend: BaseStorageBackend
+                    if self.config.ontology_backend == "sqlite":
+                        backend = SQLiteBackend(db_path=self.config.ontology_db_path)
+                    else:
+                        backend = MemoryBackend()
+
                     self.ontology_engine = OntologyEngine(
                         security_ctx=SecurityContext(
                             principal=self.config.ontology_default_principal,
                             roles=self.config.ontology_default_roles
-                        )
+                        ),
+                        object_store=ObjectStore(graph=GraphStore(), backend=backend)
                     )
 
                 # 解耦挂载：生成 Tool 注册进 registry（四种 Agent 自动可用）
                 self.ontology_engine.mount(self.tool_registry)
 
             except Exception as e:
-                print(f"⚠️ 警告：企业级 Ontology 引擎未启用（{e}）")
+                self.logger.warning(f"企业级 Ontology 引擎未启用（{e}）")
 
         # 新增：会话持久化组件
         from datetime import datetime
@@ -183,6 +223,11 @@ class Agent(ABC):
         self.history_manager.clear()
         for msg in value:
             self.history_manager.append(msg)
+
+    @property
+    def working_dir(self) -> str:
+        """工作目录（子类可覆盖）"""
+        return "."
 
     @abstractmethod
     def run(self, input_text: str, **kwargs) -> str:
@@ -492,8 +537,7 @@ class Agent(ABC):
                 （已压缩，保留最近 {self.config.min_retain_rounds} 轮完整对话）"""
 
         except Exception as e:
-            # 回退到简单摘要
-            print(f"⚠️ 智能摘要生成失败: {e}，使用简单摘要")
+            self.logger.warning(f"智能摘要生成失败: {e}，使用简单摘要")
             return self._generate_simple_summary(history)
 
     def _format_history_for_summary(self, history: List[Message]) -> str:
@@ -508,7 +552,7 @@ class Agent(ABC):
         formatted_lines = []
         for msg in history:
             # 截断过长消息（避免摘要 Prompt 过大）
-            content = msg.content[:500] if len(msg.content) > 500 else msg.content
+            content = truncate_text(msg.content, 500, ellipsis=False)
             formatted_lines.append(f"[{msg.role}]: {content}")
 
         return "\n\n".join(formatted_lines)
@@ -544,6 +588,45 @@ class Agent(ABC):
         return self.__str__()
 
     # ==================== 工具调用通用能力（从 FunctionCallAgent 提取）====================
+
+    def _build_context(self, input_text: str, system_instructions: Optional[str] = None,
+                       history: Optional[List[Message]] = None,
+                       additional_packets: Optional[List[Any]] = None) -> Optional[str]:
+        """使用 GSSC 上下文构建器融合多路信息
+
+        当 context_builder_enabled 开启时，将系统指令、对话历史、用户问题、
+        以及调用方提供的额外信息包（知识图谱检索、工具结果等）融合为结构化上下文。
+        返回 None 表示未启用或构建失败（调用方应回退到默认行为）。
+
+        Args:
+            input_text: 用户问题
+            system_instructions: 系统指令（可选）
+            history: 对话历史（可选）
+            additional_packets: 额外上下文包（可选）
+
+        Returns:
+            融合后的上下文文本，或 None
+        """
+        if getattr(self, 'context_builder', None) is None:
+            return None
+
+        try:
+            packets = []
+            for p in (additional_packets or []):
+                packets.append(p)
+            # mypy doesn't understand the above None check
+            builder = self.context_builder
+            assert builder is not None
+            return builder.build(
+                user_query=input_text,
+                conversation_history=history or [],
+                system_instructions=system_instructions or self.system_prompt,
+                additional_packets=packets
+            )
+        except Exception as e:
+            if self.config.debug:
+                self.logger.debug(f"GSSC 上下文构建失败: {e}")
+            return None
 
     def _build_tool_schemas(self) -> List[Dict[str, Any]]:
         """构建工具 JSON Schema
@@ -689,9 +772,9 @@ class Agent(ABC):
     def _execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         """执行工具调用并返回字符串结果
 
-        统一的工具执行逻辑，支持：
-        - Tool 对象（带类型转换）
-        - 函数工具（简化调用）
+        统一的工具执行逻辑（收敛到 ToolRegistry 单一入口）：
+        - 熔断检查、观测埋点、结果记录统一由 registry.execute_tool 完成
+        - 本方法只负责参数类型转换与响应格式化
 
         Args:
             tool_name: 工具名称
@@ -703,56 +786,79 @@ class Agent(ABC):
         if not self.tool_registry:
             return "❌ 错误：未配置工具注册表"
 
-        # 1. 尝试执行 Tool 对象
+        # 参数类型转换（Tool 对象路径）
         tool = self.tool_registry.get_tool(tool_name)
-        if tool:
-            # 熔断器检查（与 registry.execute_tool 一致）
-            cb = getattr(self.tool_registry, 'circuit_breaker', None)
-            if cb is not None and cb.is_open(tool_name):
-                status = cb.get_status(tool_name)
-                return (f"❌ 错误 [CIRCUIT_OPEN]: 工具 '{tool_name}' 当前被禁用，"
-                        f"{status.get('recover_in_seconds', '?')} 秒后可用")
-
+        if tool is not None:
             try:
-                typed_arguments = self._convert_parameter_types(tool_name, arguments)
-                response = tool.run_with_timing(typed_arguments)
+                arguments = self._convert_parameter_types(tool_name, arguments)
+            except Exception:
+                pass
 
-                # 记录熔断器结果
-                if cb is not None:
-                    cb.record_result(tool_name, response)
+        # 统一走 registry 执行（含熔断/观测/记录）
+        try:
+            response = self.tool_registry.execute_tool(tool_name, arguments)  # type: ignore[arg-type]
+        except Exception as exc:
+            return f"❌ 工具调用失败：{exc}"
 
-                # 根据状态添加前缀
-                from ..tools.response import ToolStatus
-                if response.status == ToolStatus.ERROR:
-                    error_code = response.error_info.get("code", "UNKNOWN") if response.error_info else "UNKNOWN"
-                    return f"❌ 错误 [{error_code}]: {response.text}"
-                elif response.status == ToolStatus.PARTIAL:
-                    return f"⚠️ 部分成功: {response.text}"
-                else:
-                    return response.text
-            except Exception as exc:
-                return f"❌ 工具调用失败：{exc}"
+        # 根据状态添加前缀
+        from ..tools.response import ToolStatus
+        if response.status == ToolStatus.ERROR:
+            error_code = response.error_info.get("code", "UNKNOWN") if response.error_info else "UNKNOWN"
+            return f"❌ 错误 [{error_code}]: {response.text}"
+        elif response.status == ToolStatus.PARTIAL:
+            return f"⚠️ 部分成功: {response.text}"
+        else:
+            return response.text
 
-        # 2. 尝试执行函数工具
-        func = self.tool_registry.get_function(tool_name)
-        if func:
+    def _execute_single_tool_call(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        tool_call_id: str,
+        step: int
+    ) -> Dict[str, Any]:
+        """执行单个工具调用并返回标准化的消息字典
+
+        统一的工具执行流程（收敛 6 处重复逻辑）：
+        1. 执行工具（_execute_tool_call）
+        2. 截断超长输出（truncator）
+        3. 记录工具结果到 trace_logger
+        4. 构建工具消息字典
+
+        Args:
+            tool_name: 工具名称
+            arguments: 工具参数
+            tool_call_id: 工具调用 ID
+            step: 当前步骤
+
+        Returns:
+            包含 role='tool' 的消息字典，可直接 append 到 messages
+        """
+        result = self._execute_tool_call(tool_name, arguments)
+
+        if self.truncator:
             try:
-                input_text = arguments.get("input", "")
-                response = self.tool_registry.execute_tool(tool_name, input_text)
+                truncate_result = self.truncator.truncate(tool_name=tool_name, output=result)
+                result = truncate_result.get('preview', result)
+            except Exception:
+                pass
 
-                # 根据状态添加前缀
-                from ..tools.response import ToolStatus
-                if response.status == ToolStatus.ERROR:
-                    error_code = response.error_info.get("code", "UNKNOWN") if response.error_info else "UNKNOWN"
-                    return f"❌ 错误 [{error_code}]: {response.text}"
-                elif response.status == ToolStatus.PARTIAL:
-                    return f"⚠️ 部分成功: {response.text}"
-                else:
-                    return response.text
-            except Exception as exc:
-                return f"❌ 工具调用失败：{exc}"
+        if self.trace_logger:
+            self.trace_logger.log_event(
+                "tool_result",
+                {
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "result": result
+                },
+                step=step
+            )
 
-        return f"❌ 错误：未找到工具 '{tool_name}'"
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": result
+        }
 
     # ==================== 会话持久化能力 ====================
 
@@ -771,9 +877,8 @@ class Agent(ABC):
                 session_name="session-auto"
             )
         except Exception as e:
-            # 自动保存失败不影响主流程
             if self.config.debug:
-                print(f"⚠️ 自动保存失败: {e}")
+                self.logger.debug(f"自动保存失败: {e}")
 
     def save_session(self, session_name: str) -> str:
         """手动保存会话
@@ -791,8 +896,7 @@ class Agent(ABC):
             raise RuntimeError("会话持久化未启用，请在 Config 中设置 session_enabled=True")
 
         # 更新元数据
-        from datetime import datetime
-        self._session_metadata["duration_seconds"] = (datetime.now() - self._start_time).total_seconds()
+        self._session_metadata["duration_seconds"] = duration_seconds(self._start_time)
 
         filepath = self.session_store.save(
             agent_config=self._get_agent_config(),
@@ -831,9 +935,9 @@ class Agent(ABC):
             )
 
             if not config_check["consistent"]:
-                print("⚠️ 环境配置不一致：")
+                self.logger.warning("环境配置不一致：")
                 for warning in config_check["warnings"]:
-                    print(f"  - {warning}")
+                    self.logger.warning(f"  - {warning}")
 
             # 检查工具 Schema 一致性
             tool_check = self.session_store.check_tool_schema_consistency(
@@ -842,8 +946,8 @@ class Agent(ABC):
             )
 
             if tool_check["changed"]:
-                print("⚠️ 工具定义已变化")
-                print(f"  建议：{tool_check['recommendation']}")
+                self.logger.warning("工具定义已变化")
+                self.logger.warning(f"  建议：{tool_check['recommendation']}")
 
         # 恢复历史
         from .message import Message
@@ -858,7 +962,7 @@ class Agent(ABC):
         if self.tool_registry and session_data.get("read_cache"):
             self.tool_registry.read_metadata_cache = session_data["read_cache"]
 
-        print(f"✅ 会话已恢复：{session_data.get('session_id', 'unknown')}")
+        self.logger.info(f"会话已恢复：{session_data.get('session_id', 'unknown')}")
 
     def list_sessions(self) -> List[Dict[str, Any]]:
         """列出所有可用会话
@@ -933,7 +1037,7 @@ class Agent(ABC):
     def run_as_subagent(
         self,
         task: str,
-        tool_filter: Optional['ToolFilter'] = None,
+        tool_filter: Optional['BaseToolFilter'] = None,
         return_summary: bool = True,
         max_steps_override: Optional[int] = None
     ) -> Dict[str, Any]:
@@ -1027,7 +1131,7 @@ class Agent(ABC):
                 if original_max_steps is not None:
                     self.max_steps = original_max_steps
             except Exception as e:
-                print(f"⚠️ 子代理状态恢复失败: {e}")
+                self.logger.warning(f"子代理状态恢复失败: {e}")
 
             # 7. 生成摘要（使用子代理元数据）
             if return_summary:
@@ -1047,7 +1151,7 @@ class Agent(ABC):
                 "metadata": metadata
             }
 
-    def _apply_tool_filter(self, tool_filter: 'ToolFilter') -> List[str]:
+    def _apply_tool_filter(self, tool_filter: 'BaseToolFilter') -> List[str]:
         """应用工具过滤器
 
         Args:
@@ -1062,29 +1166,31 @@ class Agent(ABC):
         # 保存原始工具列表
         original_tools = self.tool_registry.list_tools()
 
-        # 获取过滤后的工具列表
-        filtered_tools = tool_filter.filter(original_tools)
+        # 获取过滤后的工具列表（优先使用感知注册表属性的接口）
+        if hasattr(tool_filter, 'filter_with_registry'):
+            filtered_tools = tool_filter.filter_with_registry(self.tool_registry)
+        else:
+            filtered_tools = tool_filter.filter(original_tools)
 
         # 临时移除不允许的工具（含 Tool 对象和函数工具）
         registry = self.tool_registry
         if not hasattr(registry, '_temp_disabled_tools'):
-            registry._temp_disabled_tools = {}
+            registry._temp_disabled_tools = {}  # type: ignore[attr-defined]
         if not hasattr(registry, '_temp_disabled_functions'):
-            registry._temp_disabled_functions = {}
+            registry._temp_disabled_functions = {}  # type: ignore[attr-defined]
 
         for tool_name in original_tools:
             if tool_name not in filtered_tools:
                 # Tool 对象
                 tool = registry.get_tool(tool_name)
                 if tool:
-                    registry._temp_disabled_tools[tool_name] = tool
+                    registry._temp_disabled_tools[tool_name] = tool  # type: ignore[attr-defined]
                     if tool_name in registry._tools:
                         del registry._tools[tool_name]
                 # 函数工具
                 func = registry.get_function(tool_name)
                 if func is not None:
-                    registry._temp_disabled_functions[tool_name] = \
-                        registry._functions[tool_name]
+                    registry._temp_disabled_functions[tool_name] = registry._functions[tool_name]  # type: ignore[attr-defined]
                     if tool_name in registry._functions:
                         del registry._functions[tool_name]
 
@@ -1188,11 +1294,7 @@ class Agent(ABC):
             摘要文本
         """
         # 截断结果（避免摘要过长）
-        max_result_len = 500
-        if len(result) > max_result_len:
-            result_preview = result[:max_result_len] + "..."
-        else:
-            result_preview = result
+        result_preview = truncate_text(result, 500)
 
         # 构建摘要
         summary_parts = [
@@ -1256,7 +1358,7 @@ class Agent(ABC):
 
         # 创建并注册 TodoWriteTool
         todo_tool = TodoWriteTool(
-            project_root=str(self.working_dir) if hasattr(self, 'working_dir') else ".",
+            project_root=str(self.working_dir),
             persistence_dir=self.config.todowrite_persistence_dir
         )
 
@@ -1270,25 +1372,17 @@ class Agent(ABC):
         from ..tools.builtin.devlog_tool import DevLogTool
 
         # 获取 session_id（如果有 trace_logger 则使用其 session_id）
-        session_id = self.trace_logger.session_id if self.trace_logger else self._generate_session_id()
+        session_id = self.trace_logger.session_id if self.trace_logger else generate_session_id()
 
         # 创建并注册 DevLogTool
         devlog_tool = DevLogTool(
             session_id=session_id,
             agent_name=self.name,
-            project_root=str(self.working_dir) if hasattr(self, 'working_dir') else ".",
+            project_root=str(self.working_dir),
             persistence_dir=self.config.devlog_persistence_dir
         )
 
         self.tool_registry.register_tool(devlog_tool)
-
-    def _generate_session_id(self) -> str:
-        """生成会话 ID（如果没有 trace_logger）"""
-        import uuid
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        random_suffix = uuid.uuid4().hex[:4]
-        return f"s-{timestamp}-{random_suffix}"
 
     def _create_light_llm(self) -> SymphonyLLM:
         """创建轻量模型 LLM 实例

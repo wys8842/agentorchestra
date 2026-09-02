@@ -2,7 +2,7 @@
 
 **Symphony** 是一个企业级多智能体与 Ontology 编排框架。
 
-它把"智能决策"（Agent）与"业务语义"（企业级 Ontology，对标 Palantir）统一编排，
+它把"智能决策"（Agent）与"业务语义"（企业级 Ontology，
 如同管弦乐团各声部和谐演奏：Agent 负责思考与决策，Ontology 负责业务对象与操作，
 Workflow/Scheduler/Transaction 负责执行编排。
 

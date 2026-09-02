@@ -15,7 +15,7 @@ from .registry import ToolRegistry, global_registry
 from .response import ToolResponse, ToolStatus
 
 # 子代理机制
-from .tool_filter import CustomFilter, FullAccessFilter, ReadOnlyFilter, ToolFilter
+from .tool_filter import BaseToolFilter, CustomFilter, FullAccessFilter, ReadOnlyFilter
 
 __all__ = [
     # 基础工具系统
@@ -49,7 +49,7 @@ __all__ = [
     "MCPServerManager",
 
     # 子代理机制
-    "ToolFilter",
+    "BaseToolFilter",
     "ReadOnlyFilter",
     "FullAccessFilter",
     "CustomFilter",

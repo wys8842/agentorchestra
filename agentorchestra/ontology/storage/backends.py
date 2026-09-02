@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 
-class StorageBackend(ABC):
+class BaseStorageBackend(ABC):
     """存储后端接口"""
 
     @abstractmethod
@@ -38,7 +38,7 @@ class StorageBackend(ABC):
         pass
 
 
-class MemoryBackend(StorageBackend):
+class MemoryBackend(BaseStorageBackend):
     """内存后端"""
 
     def __init__(self):
@@ -66,7 +66,7 @@ class MemoryBackend(StorageBackend):
         self._objects.clear()
 
 
-class SQLiteBackend(StorageBackend):
+class SQLiteBackend(BaseStorageBackend):
     """SQLite 文件后端（生产持久化）
 
     表结构：objects(type TEXT, pk TEXT, data TEXT, PRIMARY KEY(type, pk))
@@ -165,3 +165,7 @@ class SQLiteBackend(StorageBackend):
             self._check_open()
             self._conn.execute("DELETE FROM objects")
         self._conn.commit()
+
+
+# 向后兼容别名
+StorageBackend = BaseStorageBackend

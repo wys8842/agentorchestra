@@ -12,6 +12,7 @@
 依赖 prometheus_client（可选）。未安装时指标收集静默降级。
 """
 
+import threading
 from typing import Any, Dict, Optional
 
 
@@ -121,13 +122,16 @@ class MetricsCollector:
         return _generate().decode("utf-8")
 
 
-# 全局指标收集器（懒加载）
+# 全局指标收集器（懒加载，线程安全）
 _global_metrics: Optional[MetricsCollector] = None
+_metrics_lock = threading.Lock()
 
 
 def get_metrics() -> MetricsCollector:
     """获取全局指标收集器"""
     global _global_metrics
     if _global_metrics is None:
-        _global_metrics = MetricsCollector()
+        with _metrics_lock:
+            if _global_metrics is None:
+                _global_metrics = MetricsCollector()
     return _global_metrics

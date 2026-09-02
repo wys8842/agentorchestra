@@ -1,4 +1,4 @@
-"""ObjectStore - 对象存储（对标 Palantir Object Storage V2）
+"""ObjectStore - 对象存储
 
 组合对象索引（ObjectIndex）和关系图（GraphStore）：
 - 对象写入带类型校验（复用 ObjectType.validate_object）
@@ -9,7 +9,7 @@
 from typing import Any, Dict, List, Optional
 
 from ..semantic.object_type import ObjectType
-from .backends import MemoryBackend, StorageBackend
+from .backends import BaseStorageBackend, MemoryBackend
 from .graph_store import GraphStore
 from .index import ObjectIndex
 
@@ -18,15 +18,18 @@ class ObjectStore:
     """对象存储"""
 
     def __init__(self, graph: Optional[GraphStore] = None,
-                 backend: Optional[StorageBackend] = None):
+                 backend: Optional[BaseStorageBackend] = None,
+                 materializer: Optional[Any] = None):
         """初始化对象存储
 
         Args:
             graph: 图存储（关系/路径查询）
             backend: 存储后端（默认内存；传 SQLiteBackend 实现持久化）
+            materializer: 物化管理器（可选，写操作后触发物化回写）
         """
         self.index = ObjectIndex(backend=backend or MemoryBackend())
         self.graph = graph or GraphStore()
+        self.materializer = materializer
         self._types: Dict[str, ObjectType] = {}
 
     @property
@@ -49,6 +52,16 @@ class ObjectStore:
 
     def list_types(self) -> List[str]:
         return list(self._types.keys())
+
+    def _materialize(self, operation: str, type_name: str,
+                     obj: Dict[str, Any], patch: Optional[Dict] = None) -> None:
+        """触发物化回写（若配置了 materializer，失败不阻断主流程）"""
+        if self.materializer is None:
+            return
+        try:
+            self.materializer.materialize(operation, type_name, obj, patch)
+        except Exception:
+            pass
 
     # ==================== 对象写入 ====================
 
@@ -78,7 +91,12 @@ class ObjectStore:
         self.graph.merge_node(
             obj_type.api_name, dict(obj), name=f"{type_name}:{pk}")
 
-        return self.index.get(type_name, pk)
+        # 物化回写（可选）
+        self._materialize("insert", type_name, dict(obj))
+
+        result = self.index.get(type_name, pk)
+        assert result is not None
+        return result
 
     def update(self, type_name: str, pk: str, patch: Dict[str, Any]) -> Dict[str, Any]:
         """更新对象（部分字段，合并后重新校验）"""
@@ -108,17 +126,20 @@ class ObjectStore:
         self.index.update_object(type_name, pk, merged)
         self.graph.merge_node(
             obj_type.api_name, dict(merged), name=f"{type_name}:{pk}")
+
+        # 物化回写（可选）
+        self._materialize("update", type_name, dict(merged), patch=dict(patch))
         return merged
 
     def delete(self, type_name: str, pk: str) -> bool:
         pk = str(pk)
         removed = self.index.remove_object(type_name, pk)
         if removed:
-            # 清理图节点（含 type:pk 和裸 pk 两种命名）
-            self.graph._nodes.pop(f"{type_name}:{pk}", None)
-            self.graph._nodes.pop(pk, None)
-            self.graph._edges.pop(f"{type_name}:{pk}", None)
-            self.graph._edges.pop(pk, None)
+            # 清理图节点（使用公共接口）
+            self.graph.remove_node(f"{type_name}:{pk}")
+            self.graph.remove_node(pk)
+            # 物化回写（可选）
+            self._materialize("delete", type_name, {"pk": pk}, patch=dict(removed))
         return removed is not None
 
     # ==================== 对象读取 ====================

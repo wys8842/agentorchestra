@@ -8,11 +8,15 @@
 """
 
 import json
+import logging
 import os
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("agentorchestra.core.session_store")
+
+from .utils import atomic_write, generate_session_id
 
 
 class SessionStore:
@@ -54,18 +58,6 @@ class SessionStore:
         self.session_dir = Path(session_dir)
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
-    def _generate_session_id(self) -> str:
-        """生成唯一的会话 ID
-
-        格式：s-{timestamp}-{uuid}
-
-        Returns:
-            会话 ID
-        """
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        unique_suffix = uuid.uuid4().hex[:8]
-        return f"s-{timestamp}-{unique_suffix}"
-
     def save(
         self,
         agent_config: Dict[str, Any],
@@ -89,7 +81,7 @@ class SessionStore:
             保存的文件路径
         """
         # 生成会话 ID（只生成一次）
-        session_id = self._generate_session_id()
+        session_id = generate_session_id(suffix_len=8)
 
         # 生成文件名
         if session_name:
@@ -114,13 +106,8 @@ class SessionStore:
             "metadata": metadata
         }
 
-        # 原子写入（临时文件 + 重命名）
-        temp_path = str(filepath) + ".tmp"
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            json.dump(session_data, f, indent=2, ensure_ascii=False)
-
-        # 原子重命名
-        os.replace(temp_path, filepath)
+        # 原子写入（临时文件 + 替换）
+        atomic_write(str(filepath), session_data, pretty=True)
 
         return str(filepath)
 
@@ -164,7 +151,7 @@ class SessionStore:
                     "metadata": data.get("metadata", {})
                 })
             except Exception as e:
-                print(f"⚠️ 警告：无法读取 {filepath}: {e}")
+                logger.warning(f"无法读取 {filepath}: {e}")
 
         # 按保存时间倒序
         sessions.sort(key=lambda x: x.get("saved_at", ""), reverse=True)

@@ -1,15 +1,33 @@
 """工具注册表 - Symphony原生工具系统"""
 
+import asyncio
+import json
 import logging
 import time
 from typing import Any, Callable, Dict, Optional
 
+from ..core.utils import measure_elapsed_ms
 from .base import Tool
 from .circuit_breaker import CircuitBreaker
 from .errors import ToolErrorCode
 from .response import ToolResponse
 
 logger = logging.getLogger("agentorchestra.tools.registry")
+
+
+def _is_error_response(response: ToolResponse) -> bool:
+    """判断响应是否为错误状态"""
+    return response.status is not None and getattr(response.status, "value", "") == "error"
+
+
+def _wrap_function_response(result: Any, elapsed_ms: float, tool_name: str, input_text: str) -> ToolResponse:
+    """将函数执行结果包装为 ToolResponse（用于函数工具路径的 timing 封装复用）"""
+    return ToolResponse.success(
+        text=str(result),
+        data={"output": result},
+        stats={"time_ms": elapsed_ms},
+        context={"tool_name": tool_name, "input": input_text}
+    )
 
 
 class ToolRegistry:
@@ -134,26 +152,30 @@ class ToolRegistry:
         func_info = self._functions.get(name)
         return func_info["func"] if func_info else None
 
-    def execute_tool(self, name: str, input_text: str) -> ToolResponse:
+    @staticmethod
+    def _parse_input(input_text: Any) -> Dict[str, Any]:
+        """解析工具输入参数为参数字典
+
+        支持：
+        - 已解析的字典
+        - JSON 字符串（要求解析结果为 dict）
+        - 普通字符串（包装为 {"input": str}）
+        - 其他对象（字符串化后包装）
         """
-        执行工具，返回 ToolResponse 对象（带熔断器保护）
+        if isinstance(input_text, dict):
+            return input_text
+        if isinstance(input_text, str):
+            try:
+                parsed = json.loads(input_text)
+            except json.JSONDecodeError:
+                return {"input": input_text}
+            if isinstance(parsed, dict):
+                return parsed
+            return {"input": input_text}
+        return {"input": str(input_text)}
 
-        Args:
-            name: 工具名称
-            input_text: 输入参数
-
-        Returns:
-            ToolResponse: 标准化的工具响应对象
-        """
-        # 追踪埋点（局部变量，避免实例属性跨调用/多线程污染）
-        trace_span = None
-        try:
-            from agentorchestra.core.tracing import get_tracer
-            trace_span = get_tracer().start_span(f"tool.{name}", {"tool": name})
-        except Exception:
-            trace_span = None
-
-        # 检查熔断器
+    def _check_circuit(self, name: str, trace_span=None) -> Optional[ToolResponse]:
+        """熔断检查：若熔断开启返回 CIRCUIT_OPEN 响应，否则返回 None"""
         if self.circuit_breaker.is_open(name):
             status = self.circuit_breaker.get_status(name)
             response = ToolResponse.error(
@@ -164,36 +186,69 @@ class ToolRegistry:
                     "circuit_status": status
                 }
             )
-            # 结束追踪 span（熔断分支）
-            try:
-                if trace_span is not None:
-                    trace_span.set_error()
-                    from agentorchestra.core.tracing import get_tracer
-                    get_tracer().end_span(trace_span)
-            except Exception:
-                pass
+            self._finish_trace_span(trace_span, error=True)
             return response
+        return None
+
+    @staticmethod
+    def _finish_trace_span(span, error: bool = False):
+        """结束追踪 span"""
+        try:
+            if span is not None:
+                from agentorchestra.core.tracing import get_tracer
+                if error:
+                    span.set_error()
+                span.set_attribute("status", "error" if error else "ok")
+                get_tracer().end_span(span)
+        except Exception:
+            pass
+
+    def _record_observability(self, name: str, response: ToolResponse):
+        """记录熔断结果 + 指标埋点"""
+        # 记录熔断器结果
+        self.circuit_breaker.record_result(name, response)
+
+        # 指标埋点
+        try:
+            from ..core.metrics import get_metrics
+            metrics = get_metrics()
+            metrics.record_tool_call(name, error=_is_error_response(response))
+        except Exception:
+            pass
+
+    def _start_trace(self, name: str):
+        """启动追踪 span"""
+        try:
+            from agentorchestra.core.tracing import get_tracer
+            return get_tracer().start_span(f"tool.{name}", {"tool": name})
+        except Exception:
+            return None
+
+    def execute_tool(self, name: str, input_text: str) -> ToolResponse:
+        """
+        执行工具，返回 ToolResponse 对象（带熔断器保护）
+
+        Args:
+            name: 工具名称
+            input_text: 输入参数（JSON 字符串或字典）
+
+        Returns:
+            ToolResponse: 标准化的工具响应对象
+        """
+        trace_span = self._start_trace(name)
+
+        # 检查熔断器
+        circuit_response = self._check_circuit(name, trace_span)
+        if circuit_response is not None:
+            return circuit_response
+
+        # 解析参数
+        parameters = self._parse_input(input_text)
 
         # 执行工具
-        response = None
-
-        # 优先查找Tool对象（新协议）
         if name in self._tools:
             tool = self._tools[name]
             try:
-                # 解析参数（支持 JSON 字符串或字典）
-                import json
-                if isinstance(input_text, str):
-                    try:
-                        parameters = json.loads(input_text)
-                    except json.JSONDecodeError:
-                        # 如果不是 JSON，作为普通字符串处理
-                        parameters = {"input": input_text}
-                elif isinstance(input_text, dict):
-                    parameters = input_text
-                else:
-                    parameters = {"input": str(input_text)}
-
                 # 使用 run_with_timing 自动添加时间统计
                 response = tool.run_with_timing(parameters)
             except Exception as e:
@@ -209,18 +264,11 @@ class ToolRegistry:
             start_time = time.time()
 
             try:
-                result = func(input_text)
-                elapsed_ms = int((time.time() - start_time) * 1000)
-
-                # 包装为 ToolResponse
-                response = ToolResponse.success(
-                    text=str(result),
-                    data={"output": result},
-                    stats={"time_ms": elapsed_ms},
-                    context={"tool_name": name, "input": input_text}
-                )
+                result = func(parameters)
+                elapsed_ms = measure_elapsed_ms(start_time)
+                response = _wrap_function_response(result, elapsed_ms, name, input_text)
             except Exception as e:
-                elapsed_ms = int((time.time() - start_time) * 1000)
+                elapsed_ms = measure_elapsed_ms(start_time)
                 response = ToolResponse.error(
                     code=ToolErrorCode.EXECUTION_ERROR,
                     message=f"函数执行失败: {str(e)}",
@@ -236,31 +284,76 @@ class ToolRegistry:
                 context={"tool_name": name}
             )
 
-        # 记录熔断器结果
-        self.circuit_breaker.record_result(name, response)
+        # 观测埋点 + 结束追踪
+        self._record_observability(name, response)
+        self._finish_trace_span(trace_span, error=_is_error_response(response))
 
-        # 观测埋点：工具指标 + 追踪结束
-        try:
-            from agentorchestra.core.metrics import get_metrics
-            metrics = get_metrics()
-            is_error = getattr(response, "status", None) is not None and \
-                getattr(response.status, "value", "") == "error"
-            metrics.record_tool_call(name, error=is_error)
-        except Exception:
-            pass
+        return response
 
-        # 结束追踪 span
-        try:
-            if trace_span is not None:
-                is_error = getattr(response, "status", None) is not None and \
-                    getattr(response.status, "value", "") == "error"
-                if is_error:
-                    trace_span.set_error()
-                trace_span.set_attribute("status", "error" if is_error else "ok")
-                from agentorchestra.core.tracing import get_tracer
-                get_tracer().end_span(trace_span)
-        except Exception:
-            pass
+    async def async_execute_tool(self, name: str, input_text: str) -> ToolResponse:
+        """
+        异步执行工具，返回 ToolResponse 对象（带熔断器保护）
+
+        与 execute_tool 语义一致，供异步/流式 Agent 使用，保证
+        所有工具执行路径都经过统一的熔断检查与观测埋点。
+
+        Args:
+            name: 工具名称
+            input_text: 输入参数（JSON 字符串或字典）
+
+        Returns:
+            ToolResponse: 标准化的工具响应对象
+        """
+        trace_span = self._start_trace(name)
+
+        # 检查熔断器
+        circuit_response = self._check_circuit(name, trace_span)
+        if circuit_response is not None:
+            return circuit_response
+
+        # 解析参数
+        parameters = self._parse_input(input_text)
+
+        # 执行工具
+        if name in self._tools:
+            tool = self._tools[name]
+            try:
+                response = await tool.arun_with_timing(parameters)
+            except Exception as e:
+                response = ToolResponse.error(
+                    code=ToolErrorCode.EXECUTION_ERROR,
+                    message=f"执行工具 '{name}' 时发生异常: {str(e)}",
+                    context={"tool_name": name, "input": input_text}
+                )
+
+        elif name in self._functions:
+            func = self._functions[name]["func"]
+            start_time = time.time()
+
+            try:
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(None, func, parameters)
+                elapsed_ms = measure_elapsed_ms(start_time)
+                response = _wrap_function_response(result, elapsed_ms, name, input_text)
+            except Exception as e:
+                elapsed_ms = measure_elapsed_ms(start_time)
+                response = ToolResponse.error(
+                    code=ToolErrorCode.EXECUTION_ERROR,
+                    message=f"函数执行失败: {str(e)}",
+                    stats={"time_ms": elapsed_ms},
+                    context={"tool_name": name, "input": input_text}
+                )
+
+        else:
+            response = ToolResponse.error(
+                code=ToolErrorCode.NOT_FOUND,
+                message=f"未找到名为 '{name}' 的工具",
+                context={"tool_name": name}
+            )
+
+        # 观测埋点 + 结束追踪
+        self._record_observability(name, response)
+        self._finish_trace_span(trace_span, error=_is_error_response(response))
 
         return response
 
@@ -299,7 +392,7 @@ class ToolRegistry:
 
     # ==================== 乐观锁机制支持 ====================
 
-    def cache_read_metadata(self, file_path: str, metadata: Dict[str, Any]):
+    def set_read_metadata(self, file_path: str, metadata: Dict[str, Any]):
         """缓存 Read 工具获取的文件元数据
 
         Args:

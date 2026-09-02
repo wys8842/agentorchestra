@@ -6,7 +6,8 @@ from abc import ABC, abstractmethod
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union
 
 from .exceptions import SymphonyException
-from .llm_response import LLMResponse, StreamStats
+from .llm_response import LLMResponse
+from .utils import measure_elapsed_ms
 
 
 class BaseLLMAdapter(ABC):
@@ -44,7 +45,7 @@ class BaseLLMAdapter(ABC):
 
         默认实现：使用队列 + 线程池包装同步流式方法
         """
-        queue = asyncio.Queue()
+        queue: asyncio.Queue[Any] = asyncio.Queue()
         loop = asyncio.get_event_loop()
 
         def _stream_to_queue():
@@ -117,13 +118,13 @@ class OpenAIAdapter(BaseLLMAdapter):
         start_time = time.time()
 
         try:
-            response = self._client.chat.completions.create(
+            response = self._client.chat.completions.create(  # type: ignore[attr-defined]
                 model=self.model,
                 messages=messages,
                 **kwargs
             )
 
-            latency_ms = int((time.time() - start_time) * 1000)
+            latency_ms = measure_elapsed_ms(start_time)
 
             # 提取内容和推理过程
             choice = response.choices[0]
@@ -167,7 +168,7 @@ class OpenAIAdapter(BaseLLMAdapter):
         start_time = time.time()
 
         try:
-            response = self._client.chat.completions.create(
+            response = self._client.chat.completions.create(  # type: ignore[attr-defined]
                 model=self.model,
                 messages=messages,
                 stream=True,
@@ -202,10 +203,10 @@ class OpenAIAdapter(BaseLLMAdapter):
                         "total_tokens": chunk.usage.total_tokens,
                     }
 
-            latency_ms = int((time.time() - start_time) * 1000)
+            latency_ms = measure_elapsed_ms(start_time)
 
             # 返回统计信息（存储到适配器，供外部获取）
-            self.last_stats = StreamStats(
+            self.last_stats = LLMResponse(
                 model=self.model,
                 usage=usage,
                 latency_ms=latency_ms,
@@ -223,7 +224,7 @@ class OpenAIAdapter(BaseLLMAdapter):
         start_time = time.time()
 
         try:
-            response = await self._async_client.chat.completions.create(
+            response = await self._async_client.chat.completions.create(  # type: ignore[attr-defined]
                 model=self.model,
                 messages=messages,
                 stream=True,
@@ -258,10 +259,10 @@ class OpenAIAdapter(BaseLLMAdapter):
                         "total_tokens": chunk.usage.total_tokens,
                     }
 
-            latency_ms = int((time.time() - start_time) * 1000)
+            latency_ms = measure_elapsed_ms(start_time)
 
             # 返回统计信息（存储到适配器，供外部获取）
-            self.last_stats = StreamStats(
+            self.last_stats = LLMResponse(
                 model=self.model,
                 usage=usage,
                 latency_ms=latency_ms,
@@ -278,7 +279,7 @@ class OpenAIAdapter(BaseLLMAdapter):
             self._client = self.create_client()
 
         try:
-            response = self._client.chat.completions.create(
+            response = self._client.chat.completions.create(  # type: ignore[attr-defined]
                 model=self.model,
                 messages=messages,
                 tools=tools,
@@ -346,9 +347,9 @@ class AnthropicAdapter(BaseLLMAdapter):
             if system_content:
                 request_params["system"] = system_content
 
-            response = self._client.messages.create(**request_params)
+            response = self._client.messages.create(**request_params)  # type: ignore[attr-defined]
 
-            latency_ms = int((time.time() - start_time) * 1000)
+            latency_ms = measure_elapsed_ms(start_time)
 
             # 提取内容
             content = ""
@@ -397,7 +398,7 @@ class AnthropicAdapter(BaseLLMAdapter):
 
             usage = {}
 
-            with self._client.messages.stream(**request_params) as stream:
+            with self._client.messages.stream(**request_params) as stream:  # type: ignore[attr-defined]
                 for text in stream.text_stream:
                     yield text
 
@@ -410,9 +411,9 @@ class AnthropicAdapter(BaseLLMAdapter):
                         "total_tokens": final_message.usage.input_tokens + final_message.usage.output_tokens,
                     }
 
-            latency_ms = int((time.time() - start_time) * 1000)
+            latency_ms = measure_elapsed_ms(start_time)
 
-            self.last_stats = StreamStats(
+            self.last_stats = LLMResponse(
                 model=self.model,
                 usage=usage,
                 latency_ms=latency_ms
@@ -443,7 +444,7 @@ class AnthropicAdapter(BaseLLMAdapter):
             if system_content:
                 request_params["system"] = system_content
 
-            response = self._client.messages.create(**request_params)
+            response = self._client.messages.create(**request_params)  # type: ignore[attr-defined]
             return response
 
         except Exception as e:
@@ -507,7 +508,7 @@ class GeminiAdapter(BaseLLMAdapter):
             if system_instruction:
                 model_params["system_instruction"] = system_instruction
 
-            model = self._client.GenerativeModel(**model_params)
+            model = self._client.GenerativeModel(**model_params)  # type: ignore[attr-defined]
 
             # 生成内容
             response = model.generate_content(
@@ -515,7 +516,7 @@ class GeminiAdapter(BaseLLMAdapter):
                 generation_config=generation_config if generation_config else None
             )
 
-            latency_ms = int((time.time() - start_time) * 1000)
+            latency_ms = measure_elapsed_ms(start_time)
 
             # 提取内容
             content = response.text if hasattr(response, 'text') else ""
@@ -558,7 +559,7 @@ class GeminiAdapter(BaseLLMAdapter):
             if system_instruction:
                 model_params["system_instruction"] = system_instruction
 
-            model = self._client.GenerativeModel(**model_params)
+            model = self._client.GenerativeModel(**model_params)  # type: ignore[attr-defined]
 
             usage = {}
 
@@ -580,9 +581,9 @@ class GeminiAdapter(BaseLLMAdapter):
                         "total_tokens": chunk.usage_metadata.total_token_count,
                     }
 
-            latency_ms = int((time.time() - start_time) * 1000)
+            latency_ms = measure_elapsed_ms(start_time)
 
-            self.last_stats = StreamStats(
+            self.last_stats = LLMResponse(
                 model=self.model,
                 usage=usage,
                 latency_ms=latency_ms
@@ -614,7 +615,7 @@ class GeminiAdapter(BaseLLMAdapter):
             if system_instruction:
                 model_params["system_instruction"] = system_instruction
 
-            model = self._client.GenerativeModel(**model_params, tools=gemini_tools)
+            model = self._client.GenerativeModel(**model_params, tools=gemini_tools)  # type: ignore[attr-defined]
 
             # 提取温度等生成参数
             generation_kwargs = {}

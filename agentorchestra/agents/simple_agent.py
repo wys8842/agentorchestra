@@ -1,7 +1,7 @@
 """简单Agent实现 - 基于 Function Calling"""
 
 import json
-from typing import TYPE_CHECKING, AsyncGenerator, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Iterator, List, Optional, cast
 
 from ..core.agent import Agent
 from ..core.config import Config
@@ -9,6 +9,7 @@ from ..core.lifecycle import LifecycleHook
 from ..core.llm import SymphonyLLM
 from ..core.message import Message
 from ..core.streaming import StreamEvent, StreamEventType
+from ..core.utils import duration_seconds, parse_tool_arguments, serialize_tool_calls
 
 if TYPE_CHECKING:
     from ..tools.registry import ToolRegistry
@@ -68,19 +69,14 @@ class SimpleAgent(Agent):
         """
         from datetime import datetime
 
-        from agentorchestra.observability import TraceLogger
-
         session_start_time = datetime.now()
 
-        # 为每次 run 创建新的 TraceLogger（避免多轮对话时文件已关闭的问题）
-        trace_logger = None
-        if self.config.trace_enabled:
-            trace_logger = TraceLogger(
-                output_dir=self.config.trace_dir,
-                sanitize=self.config.trace_sanitize,
-                html_include_raw_response=self.config.trace_html_include_raw_response
-            )
-            trace_logger.log_event(
+        # 构建消息列表
+        messages = self._build_messages(input_text)
+
+        # 记录会话开始
+        if self.trace_logger:
+            self.trace_logger.log_event(
                 "session_start",
                 {
                     "agent_name": self.name,
@@ -88,12 +84,9 @@ class SimpleAgent(Agent):
                 }
             )
 
-        # 构建消息列表
-        messages = self._build_messages(input_text)
-
         # 记录用户消息
-        if trace_logger:
-            trace_logger.log_event(
+        if self.trace_logger:
+            self.trace_logger.log_event(
                 "message_written",
                 {"role": "user", "content": input_text}
             )
@@ -101,15 +94,15 @@ class SimpleAgent(Agent):
         # 如果没有启用工具调用，直接返回 LLM 响应
         if not self.enable_tool_calling or not self.tool_registry:
             llm_response = self.llm.invoke(messages, **kwargs)
-            response_text = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            response_text: str = llm_response.content if (hasattr(llm_response, 'content') and llm_response.content is not None) else str(llm_response)
 
             # 保存到历史记录
             self.add_message(Message(input_text, "user"))
-            self.add_message(Message(response_text, "assistant"))
+            self.add_message(Message(cast(str, response_text), "assistant"))
 
-            if trace_logger:
-                duration = (datetime.now() - session_start_time).total_seconds()
-                trace_logger.log_event(
+            if self.trace_logger:
+                duration = duration_seconds(session_start_time)
+                self.trace_logger.log_event(
                     "session_end",
                     {
                         "duration": duration,
@@ -119,7 +112,7 @@ class SimpleAgent(Agent):
                         "latency_ms": llm_response.latency_ms if hasattr(llm_response, 'latency_ms') else 0
                     }
                 )
-                trace_logger.finalize()
+                self.trace_logger.finalize()
 
             return response_text
 
@@ -142,8 +135,8 @@ class SimpleAgent(Agent):
                 )
             except Exception as e:
                 print(f"❌ LLM 调用失败: {e}")
-                if trace_logger:
-                    trace_logger.log_event(
+                if self.trace_logger:
+                    self.trace_logger.log_event(
                         "error",
                         {"error_type": "LLM_ERROR", "message": str(e)},
                         step=current_iteration
@@ -154,9 +147,9 @@ class SimpleAgent(Agent):
             response_message = response.choices[0].message
 
             # 记录模型输出
-            if trace_logger:
+            if self.trace_logger:
                 usage = response.usage
-                trace_logger.log_event(
+                self.trace_logger.log_event(
                     "model_output",
                     {
                         "content": response_message.content,
@@ -181,17 +174,7 @@ class SimpleAgent(Agent):
             messages.append({
                 "role": "assistant",
                 "content": response_message.content,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }
-                    }
-                    for tc in tool_calls
-                ]
+                "tool_calls": serialize_tool_calls(tool_calls)
             })
 
             # 执行所有工具调用
@@ -200,7 +183,7 @@ class SimpleAgent(Agent):
                 tool_call_id = tool_call.id
 
                 try:
-                    arguments = json.loads(tool_call.function.arguments)
+                    arguments = parse_tool_arguments(tool_call)
                 except json.JSONDecodeError as e:
                     print(f"❌ 工具参数解析失败: {e}")
                     messages.append({
@@ -211,8 +194,8 @@ class SimpleAgent(Agent):
                     continue
 
                 # 记录工具调用
-                if trace_logger:
-                    trace_logger.log_event(
+                if self.trace_logger:
+                    self.trace_logger.log_event(
                         "tool_call",
                         {
                             "tool_name": tool_name,
@@ -222,40 +205,23 @@ class SimpleAgent(Agent):
                         step=current_iteration
                     )
 
-                # 执行工具（复用基类方法）
-                result = self._execute_tool_call(tool_name, arguments)
-
-                # 记录工具结果
-                if trace_logger:
-                    trace_logger.log_event(
-                        "tool_result",
-                        {
-                            "tool_name": tool_name,
-                            "tool_call_id": tool_call_id,
-                            "result": result
-                        },
-                        step=current_iteration
-                    )
-
-                # 添加工具结果到消息
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": result
-                })
+                # 执行工具并处理结果（使用基类公共方法，收敛 6 处重复逻辑）
+                tool_result = self._execute_single_tool_call(
+                    tool_name, arguments, tool_call_id, current_iteration)
+                messages.append(tool_result)
 
         # 如果超过最大迭代次数，获取最后一次回答
         if current_iteration >= self.max_tool_iterations and not final_response:
             llm_response = self.llm.invoke(messages, **kwargs)
-            final_response = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            final_response = cast(str, llm_response.content) if hasattr(llm_response, 'content') else str(llm_response)
 
         # 保存到历史记录
         self.add_message(Message(input_text, "user"))
-        self.add_message(Message(final_response, "assistant"))
+        self.add_message(Message(cast(str, final_response), "assistant"))
 
-        if trace_logger:
-            duration = (datetime.now() - session_start_time).total_seconds()
-            trace_logger.log_event(
+        if self.trace_logger:
+            duration = duration_seconds(session_start_time)
+            self.trace_logger.log_event(
                 "session_end",
                 {
                     "duration": duration,
@@ -264,11 +230,11 @@ class SimpleAgent(Agent):
                     "status": "success"
                 }
             )
-            trace_logger.finalize()
+            self.trace_logger.finalize()
 
         return final_response
 
-    def _build_messages(self, input_text: str) -> List[Dict[str, str]]:
+    def _build_messages(self, input_text: str) -> List[Dict[str, Any]]:
         """构建消息列表"""
         messages = []
 
@@ -294,10 +260,14 @@ class SimpleAgent(Agent):
                 })
             # 其他角色跳过（避免 OpenAI API 拒绝）
 
+        # 融合多路上下文（GSSC，可选）
+        gssc_context = self._build_context(input_text, history=self._history)
+        user_content = gssc_context if gssc_context is not None else input_text
+
         # 添加用户问题
         messages.append({
             "role": "user",
-            "content": input_text
+            "content": user_content
         })
 
         return messages
@@ -306,12 +276,21 @@ class SimpleAgent(Agent):
         """
         添加工具到Agent（便利方法）
 
+        .. deprecated::
+            使用 `register_tool` 替代（与 ToolRegistry 命名一致）。
+
         Args:
             tool: Tool对象
             auto_expand: 是否自动展开可展开的工具（默认True）
 
         如果工具是可展开的（expandable=True），会自动展开为多个独立工具
         """
+        import warnings
+        warnings.warn(
+            "Agent.add_tool is deprecated, use register_tool instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if not self.tool_registry:
             from ..tools.registry import ToolRegistry
             self.tool_registry = ToolRegistry()
@@ -322,7 +301,31 @@ class SimpleAgent(Agent):
         self.tool_registry.register_tool(tool, auto_expand=auto_expand)
 
     def remove_tool(self, tool_name: str) -> bool:
-        """移除工具（便利方法）"""
+        """移除工具（便利方法）
+
+        .. deprecated::
+            使用 `unregister_tool` 替代。
+        """
+        import warnings
+        warnings.warn(
+            "Agent.remove_tool is deprecated, use unregister_tool instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if self.tool_registry:
+            return self.tool_registry.unregister(tool_name)
+        return False
+
+    def register_tool(self, tool, auto_expand: bool = True) -> None:
+        """注册工具到Agent（与 ToolRegistry.register_tool 命名一致）"""
+        if not self.tool_registry:
+            from ..tools.registry import ToolRegistry
+            self.tool_registry = ToolRegistry()
+            self.enable_tool_calling = True
+        self.tool_registry.register_tool(tool, auto_expand=auto_expand)
+
+    def unregister_tool(self, tool_name: str) -> bool:
+        """取消注册工具（与 ToolRegistry.unregister 命名一致）"""
         if self.tool_registry:
             return self.tool_registry.unregister(tool_name)
         return False
@@ -369,10 +372,12 @@ class SimpleAgent(Agent):
         self.add_message(Message(input_text, "user"))
         self.add_message(Message(full_response, "assistant"))
 
-    async def arun_stream(
+    async def arun_stream(  # type: ignore[override]
         self,
         input_text: str,
         on_start: LifecycleHook = None,
+        on_step: LifecycleHook = None,
+        on_tool_call: LifecycleHook = None,
         on_finish: LifecycleHook = None,
         on_error: LifecycleHook = None,
         **kwargs
@@ -385,6 +390,8 @@ class SimpleAgent(Agent):
         Args:
             input_text: 用户输入
             on_start: 开始钩子
+            on_step: 步骤钩子（SimpleAgent 不使用，为 API 一致性保留）
+            on_tool_call: 工具调用钩子（SimpleAgent 不使用，为 API 一致性保留）
             on_finish: 完成钩子
             on_error: 错误钩子
             **kwargs: 其他参数

@@ -1,6 +1,6 @@
 # Symphony 框架文档
 
-**Symphony** 是一个灵活、可扩展的多智能体框架，集成企业级 Ontology（对标 Palantir），
+**Symphony** 是一个灵活、可扩展的多智能体框架，集成企业级 Ontology，
 把"智能决策"（Agent）与"业务语义"（Ontology）统一编排，如同管弦乐团各声部和谐演奏。
 
 ## 模块索引

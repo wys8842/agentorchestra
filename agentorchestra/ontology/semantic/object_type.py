@@ -1,45 +1,16 @@
-"""ObjectType - 对象类型定义（对标 Palantir Object type）
+"""ObjectType - 对象类型定义
 
 语义层核心：把数据源映射为业务对象。
 - ObjectType: 业务对象类型（客户/订单/设备），含主键、属性、链接
-- LinkType: 对象间关系（方向/基数）
 - 属性统一使用框架的 ToolParameter（与工具体系参数一致）
 - 派生属性通过 derived_properties 集合标记（值由 Function 计算）
+- 对象间关系见 LinkType（已拆分到 link_type.py）
 """
 
 from typing import Any, Dict, List, Optional, Set
 
 from ...tools.base import ToolParameter
-
-
-class LinkType:
-    """对象间链接类型"""
-
-    def __init__(
-        self,
-        name: str,
-        from_type: str,
-        to_type: str,
-        cardinality: str = "ONE_TO_MANY",
-        description: str = "",
-    ):
-        self.name = name
-        self.from_type = from_type
-        self.to_type = to_type
-        self.cardinality = cardinality
-        self.description = description
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "name": self.name,
-            "from_type": self.from_type,
-            "to_type": self.to_type,
-            "cardinality": self.cardinality,
-            "description": self.description,
-        }
-
-    def __repr__(self) -> str:
-        return f"LinkType({self.from_type}-[{self.name}]->{self.to_type})"
+from .link_type import LinkType
 
 
 class ObjectType:
@@ -150,7 +121,7 @@ class ObjectType:
 
     # ==================== 类层次 ====================
 
-    def is_subclass_of(self, other_type: str, type_registry: Dict[str, "ObjectType"] = None) -> bool:
+    def is_subclass_of(self, other_type: str, type_registry: Optional[Dict[str, "ObjectType"]] = None) -> bool:
         """判断当前类型是否为指定类型的子类（含多级）"""
         current_name = self.parent_type
         visited = set()
@@ -165,7 +136,7 @@ class ObjectType:
         return False
 
     def _valid_type(self, prop_type: str, value: Any) -> bool:
-        type_map = {
+        type_map: Dict[str, type | tuple[type, ...]] = {
             "string": str,
             "integer": int,
             "number": (int, float),

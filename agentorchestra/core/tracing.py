@@ -91,23 +91,62 @@ class MemoryExporter(SpanExporter):
 
     def __init__(self):
         self.spans: List[Dict[str, Any]] = []
+        self._lock = threading.Lock()
 
     def export(self, span: Span) -> None:
-        self.spans.append(span.to_dict())
+        with self._lock:
+            self.spans.append(span.to_dict())
+
+    def read_all(self) -> List[Dict[str, Any]]:
+        """读取全部 span（返回副本，线程安全）"""
+        with self._lock:
+            return list(self.spans)
+
+    def clear(self) -> None:
+        with self._lock:
+            self.spans.clear()
 
 
 class JsonlExporter(SpanExporter):
-    """JSONL 文件导出器"""
+    """JSONL 文件导出器（线程安全写入，可回读）"""
 
     def __init__(self, filepath: str = "memory/traces/spans.jsonl"):
         import os
         if os.path.dirname(filepath):
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
         self.filepath = filepath
+        self._lock = threading.Lock()
 
     def export(self, span: Span) -> None:
-        with open(self.filepath, "a", encoding="utf-8") as f:
-            f.write(json.dumps(span.to_dict(), ensure_ascii=False) + "\n")
+        with self._lock:
+            with open(self.filepath, "a", encoding="utf-8") as f:
+                f.write(json.dumps(span.to_dict(), ensure_ascii=False) + "\n")
+
+    def read_all(self) -> List[Dict[str, Any]]:
+        """读取全部 span（供 monitor /traces 消费）"""
+        import os
+        if not os.path.exists(self.filepath):
+            return []
+        with self._lock:
+            spans = []
+            try:
+                with open(self.filepath, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            spans.append(json.loads(line))
+            except (IOError, json.JSONDecodeError):
+                return []
+            return spans
+
+    def clear(self) -> None:
+        import os
+        with self._lock:
+            if os.path.exists(self.filepath):
+                try:
+                    os.remove(self.filepath)
+                except OSError:
+                    pass
 
 
 class Tracer:
@@ -184,24 +223,30 @@ class Tracer:
     # ==================== 导出 ====================
 
     def export_all(self) -> List[Dict[str, Any]]:
-        """导出所有已结束 span（仅 MemoryExporter 支持）"""
-        if isinstance(self.exporter, MemoryExporter):
-            return list(self.exporter.spans)
+        """导出所有已结束 span（支持 Memory/Jsonl exporter）"""
+        if hasattr(self.exporter, "read_all"):
+            return self.exporter.read_all()
         return []
 
     def clear(self) -> None:
         """清空导出的 span"""
-        if isinstance(self.exporter, MemoryExporter):
-            self.exporter.spans.clear()
+        if hasattr(self.exporter, "clear"):
+            self.exporter.clear()
 
 
 # 全局追踪器
 _global_tracer: Optional[Tracer] = None
+_tracer_lock = threading.Lock()
 
 
 def get_tracer(exporter: Optional[SpanExporter] = None) -> Tracer:
-    """获取全局追踪器"""
+    """获取全局追踪器（线程安全）
+
+    首次调用时创建；后续调用忽略 exporter 参数（保持单例一致性）。
+    """
     global _global_tracer
     if _global_tracer is None:
-        _global_tracer = Tracer(exporter)
+        with _tracer_lock:
+            if _global_tracer is None:
+                _global_tracer = Tracer(exporter)
     return _global_tracer

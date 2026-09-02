@@ -81,9 +81,4 @@ class HealthCheck:
                 return {"name": "object_store", "status": "error", "detail": str(e)}
         self.register(_check)
 
-    def register_component_check(self, name: str, fn: Callable) -> None:
-        """注册自定义组件检查"""
-        def _check():
-            ok = fn()
-            return {"name": name, "status": "ok" if ok else "degraded"}
-        self.register(_check)
+

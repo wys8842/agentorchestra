@@ -83,22 +83,22 @@ class TransactionManager:
         # ① 正序执行
         for step in steps:
             action_name = step.get("action")
-            action = self._actions.get(action_name)
+            action = self._actions.get(action_name)  # type: ignore[arg-type]
             if not action:
                 # 未注册动作视为失败：触发已成功动作的补偿
-                tx_record["failed"] = action_name
-                tx_record["errors"].append(f"动作未注册: {action_name}")
+                tx_record["failed"] = action_name  # type: ignore[assignment]
+                tx_record["errors"].append(f"动作未注册: {action_name}")  # type: ignore[union-attr]
                 break
 
             step_params = step.get("params", {})
             try:
                 action.action_fn(step_params, ctx)
-                completed.append(action_name)
-                completed_params[action_name] = step_params
-                tx_record["completed"].append(action_name)
+                completed.append(action_name)  # type: ignore[arg-type]
+                completed_params[action_name] = step_params  # type: ignore[index]
+                tx_record["completed"].append(action_name)  # type: ignore[union-attr]
             except Exception as e:
-                tx_record["failed"] = action_name
-                tx_record["errors"].append(f"动作 '{action_name}' 失败: {e}")
+                tx_record["failed"] = action_name  # type: ignore[assignment]
+                tx_record["errors"].append(f"动作 '{action_name}' 失败: {e}")  # type: ignore[union-attr]
                 break
 
         # ② 若失败，逆序补偿
@@ -108,13 +108,13 @@ class TransactionManager:
                 if action and action.compensate_fn:
                     try:
                         action.compensate_fn(completed_params.get(name, {}), ctx)
-                        tx_record["compensated"].append(name)
+                        tx_record["compensated"].append(name)  # type: ignore[union-attr]
                     except Exception as e:
-                        tx_record["errors"].append(f"补偿 '{name}' 失败: {e}")
+                        tx_record["errors"].append(f"补偿 '{name}' 失败: {e}")  # type: ignore[union-attr]
                 elif action and not action.compensate_fn:
-                    tx_record["errors"].append(f"动作 '{name}' 无补偿，无法回滚")
+                    tx_record["errors"].append(f"动作 '{name}' 无补偿，无法回滚")  # type: ignore[union-attr]
 
-        tx_record["success"] = not tx_record["failed"]
+        tx_record["success"] = not tx_record["failed"]  # type: ignore[assignment]
         tx_record["ended_at"] = datetime.now().isoformat()
         self._tx_log.append(tx_record)
         return tx_record
@@ -124,7 +124,7 @@ class TransactionManager:
     def savepoint(self, name: str, store) -> Dict[str, Any]:
         """创建保存点（快照当前状态）"""
         from ..storage.object_store import ObjectStore
-        snapshot = {"objects": {}}
+        snapshot: Dict[str, Any] = {"objects": {}}
         if isinstance(store, ObjectStore):
             for t in store.list_types():
                 snapshot["objects"][t] = list(store.list_objects(t))
@@ -137,8 +137,11 @@ class TransactionManager:
             return False
         try:
             for t in store.list_types():
+                obj_type = store.get_type(t)
+                if obj_type is None:
+                    continue
                 for obj in store.list_objects(t):
-                    pk = obj.get(store.get_type(t).primary_key)
+                    pk = obj.get(obj_type.primary_key)
                     if pk is not None:
                         store.delete(t, str(pk))
             for t, objs in savepoint.get("snapshot", {}).get("objects", {}).items():

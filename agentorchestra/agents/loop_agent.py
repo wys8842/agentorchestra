@@ -1,11 +1,12 @@
 """Loop Agent实现 - 基于 Function Calling 的循环执行智能体"""
 
+import asyncio
 import json
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Iterator, List, Optional, Tuple, cast
 
 from ..core.agent import Agent
 from ..core.config import Config
-from ..core.lifecycle import LifecycleHook
+from ..core.lifecycle import EventType, LifecycleHook
 from ..core.llm import SymphonyLLM
 from ..core.message import Message
 from ..core.streaming import StreamEvent, StreamEventType
@@ -40,7 +41,7 @@ class LoopAgent(Agent):
         config: Optional[Config] = None,
         tool_registry: Optional['ToolRegistry'] = None,
         enable_tool_calling: bool = True,
-        max_iterations: int = 5
+        max_steps: int = 5
     ):
         """
         初始化 LoopAgent
@@ -52,7 +53,7 @@ class LoopAgent(Agent):
             config: 配置对象
             tool_registry: 工具注册表（可选）
             enable_tool_calling: 是否启用工具调用（默认True）
-            max_iterations: 最大循环迭代次数（默认5）
+            max_steps: 最大循环迭代次数（默认5）
         """
         # 传递 tool_registry 到基类
         super().__init__(
@@ -63,7 +64,7 @@ class LoopAgent(Agent):
             tool_registry=tool_registry
         )
         self.enable_tool_calling = enable_tool_calling and tool_registry is not None
-        self.max_iterations = max_iterations
+        self.max_steps = max_steps
 
     def run(self, input_text: str, **kwargs) -> str:
         """
@@ -102,11 +103,11 @@ class LoopAgent(Agent):
         # 如果没有启用工具调用，直接返回 LLM 响应
         if not self.enable_tool_calling or not self.tool_registry:
             llm_response = self.llm.invoke(messages, **kwargs)
-            response_text = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            response_text: str = llm_response.content if (hasattr(llm_response, 'content') and llm_response.content is not None) else str(llm_response)
 
             # 保存到历史记录
             self.add_message(Message(input_text, "user"))
-            self.add_message(Message(response_text, "assistant"))
+            self.add_message(Message(cast(str, response_text), "assistant"))
 
             if self.trace_logger:
                 duration = duration_seconds(session_start_time)
@@ -130,7 +131,7 @@ class LoopAgent(Agent):
         current_iteration = 0
         final_response = ""
 
-        while current_iteration < self.max_iterations:
+        while current_iteration < self.max_steps:  # type: ignore[operator]
             current_iteration += 1
 
             # 调用 LLM（Function Calling）
@@ -205,20 +206,15 @@ class LoopAgent(Agent):
                         )
                     continue
 
-                # 执行工具（复用基类方法）
-                result = self._execute_tool_call(tool_name, arguments)
-
-                # 添加工具结果到消息
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": result
-                })
+                # 执行工具并处理结果（使用基类公共方法，收敛 6 处重复逻辑）
+                tool_result = self._execute_single_tool_call(
+                    tool_name, arguments, tool_call_id, current_iteration)
+                messages.append(tool_result)
 
         # 如果达到最大迭代次数，获取最后一次 LLM 回答
-        if current_iteration >= self.max_iterations and not final_response:
+        if current_iteration >= self.max_steps and not final_response:  # type: ignore[operator]
             llm_response = self.llm.invoke(messages, **kwargs)
-            final_response = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            final_response = cast(str, llm_response.content) if hasattr(llm_response, 'content') else str(llm_response)
 
         # 保存到历史记录
         self.add_message(Message(input_text, "user"))
@@ -232,14 +228,14 @@ class LoopAgent(Agent):
                     "duration": duration,
                     "total_steps": current_iteration,
                     "final_answer": final_response,
-                    "status": "success" if current_iteration < self.max_iterations else "max_iterations_reached"
+                    "status": "success" if current_iteration < self.max_steps else "max_steps_reached"  # type: ignore[operator]
                 }
             )
             self.trace_logger.finalize()
 
         return final_response
 
-    def _build_messages(self, input_text: str) -> List[Dict[str, str]]:
+    def _build_messages(self, input_text: str) -> List[Dict[str, Any]]:
         """构建消息列表"""
         messages = []
 
@@ -280,6 +276,91 @@ class LoopAgent(Agent):
             schemas.extend(user_tool_schemas)
 
         return schemas
+
+    async def _execute_tools_async(
+        self,
+        tool_calls: List[Any],
+        current_iteration: int,
+        on_tool_call: LifecycleHook = None
+    ) -> List[Tuple[str, str, Dict[str, Any]]]:
+        """
+        异步并行执行工具（经 registry 熔断保护）
+
+        策略：用户工具并行执行（最多 max_concurrent_tools 个，走 registry.async_execute_tool）
+
+        Args:
+            tool_calls: 工具调用列表
+            current_iteration: 当前迭代次数
+            on_tool_call: 工具调用钩子
+
+        Returns:
+            [(tool_name, tool_call_id, result_dict), ...]
+        """
+        results: List[Tuple[str, str, Dict[str, Any]]] = []
+
+        if not tool_calls:
+            return results
+
+        max_concurrent = getattr(self.config, 'max_concurrent_tools', 3)
+
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def execute_one(tc):
+            async with semaphore:
+                tool_name = tc.function.name
+                tool_call_id = tc.id
+
+                try:
+                    arguments = parse_tool_arguments(tc)
+                except json.JSONDecodeError as e:
+                    return (tool_name, tool_call_id, {"content": f"错误：参数格式不正确 - {str(e)}"})
+
+                # 触发工具调用事件
+                await self._emit_event(
+                    EventType.TOOL_CALL,
+                    on_tool_call,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    args=arguments,
+                    step=current_iteration
+                )
+
+                # 统一经 registry 异步执行（含熔断检查/观测埋点/结果记录）
+                if self.tool_registry:
+                    tool_response = await self.tool_registry.async_execute_tool(tool_name, arguments)
+                    result_content = tool_response.text
+
+                    # 截断保护（仅成功/部分结果）
+                    if tool_response.status.value != "error":
+                        try:
+                            truncate_result = self.truncator.truncate(
+                                tool_name=tool_name,
+                                output=result_content
+                            )
+                            result_content = truncate_result.get('preview', result_content)
+                        except Exception:
+                            pass
+                else:
+                    result_content = self._execute_tool_call(tool_name, arguments)
+
+                # 记录工具结果
+                if self.trace_logger:
+                    self.trace_logger.log_event(
+                        "tool_result",
+                        {
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_call_id,
+                            "result": result_content
+                        },
+                        step=current_iteration
+                    )
+
+                return (tool_name, tool_call_id, {"content": result_content})
+
+        # 并行执行
+        results = await asyncio.gather(*[execute_one(tc) for tc in tool_calls])
+
+        return list(results)
 
     def add_tool(self, tool, auto_expand: bool = True) -> None:
         """
@@ -383,10 +464,12 @@ class LoopAgent(Agent):
         self.add_message(Message(input_text, "user"))
         self.add_message(Message(full_response, "assistant"))
 
-    async def arun_stream(
+    async def arun_stream(  # type: ignore[override]
         self,
         input_text: str,
         on_start: LifecycleHook = None,
+        on_step: LifecycleHook = None,
+        on_tool_call: LifecycleHook = None,
         on_finish: LifecycleHook = None,
         on_error: LifecycleHook = None,
         **kwargs
@@ -394,11 +477,16 @@ class LoopAgent(Agent):
         """
         LoopAgent 真正的流式执行
 
-        实时返回 LLM 输出的每个文本块，并在循环结束时发送完成事件
+        实时返回：
+        - LLM 输出的每个文本块
+        - 工具调用的开始和结束
+        - 步骤的开始和结束
 
         Args:
             input_text: 用户输入
             on_start: 开始钩子
+            on_step: 步骤钩子
+            on_tool_call: 工具调用钩子
             on_finish: 完成钩子
             on_error: 错误钩子
             **kwargs: 其他参数
@@ -413,9 +501,11 @@ class LoopAgent(Agent):
             input_text=input_text
         )
 
+        await self._emit_event(EventType.AGENT_START, on_start, input_text=input_text)
+
         try:
             # 构建消息列表
-            messages = []
+            messages: List[Dict[str, Any]] = []
 
             if self.system_prompt:
                 messages.append({"role": "system", "content": self.system_prompt})
@@ -429,33 +519,47 @@ class LoopAgent(Agent):
             full_response = ""
             current_iteration = 0
 
-            # 发送步骤开始事件
-            yield StreamEvent.create(
-                StreamEventType.STEP_START,
-                self.name,
-                iteration=1,
-                max_steps=self.max_iterations,
-                phase="execution"
-            )
-
-            while current_iteration < self.max_iterations:
+            while current_iteration < self.max_steps:  # type: ignore[operator]
                 current_iteration += 1
 
+                # 发送步骤开始事件
+                yield StreamEvent.create(
+                    StreamEventType.STEP_START,
+                    self.name,
+                    iteration=current_iteration,
+                    max_steps=self.max_steps
+                )
+
+                await self._emit_event(EventType.STEP_START, on_step, step=current_iteration)
+
                 # LLM 流式调用（单轮）
-                async for chunk in self.llm.astream_invoke(messages, **kwargs):
-                    full_response += chunk
+                try:
+                    async for chunk in self.llm.astream_invoke(messages, **kwargs):
+                        full_response += chunk
+
+                        # 发送 LLM 输出块
+                        yield StreamEvent.create(
+                            StreamEventType.LLM_CHUNK,
+                            self.name,
+                            chunk=chunk,
+                            iteration=current_iteration
+                        )
+
+                except Exception as e:
+                    error_msg = f"LLM 调用失败: {str(e)}"
                     yield StreamEvent.create(
-                        StreamEventType.LLM_CHUNK,
+                        StreamEventType.ERROR,
                         self.name,
-                        chunk=chunk,
-                        iteration=current_iteration,
-                        phase="execution"
+                        error=error_msg,
+                        iteration=current_iteration
                     )
+                    await self._emit_event(EventType.AGENT_ERROR, on_error, error=error_msg)
+                    raise
 
                 # 解析工具调用（需要完整响应）
-                # 使用非流式调用获取 tool_calls
+                # 使用异步调用获取 tool_calls
                 try:
-                    response = self.llm.invoke_with_tools(
+                    response = await self.llm.ainvoke_with_tools(
                         messages=messages,
                         tools=self._build_tool_schemas(),
                         tool_choice="auto",
@@ -475,7 +579,10 @@ class LoopAgent(Agent):
                             total_steps=current_iteration,
                             max_steps_reached=False
                         )
-                        break
+                        await self._emit_event(EventType.AGENT_FINISH, on_finish, result=final_answer)
+                        self.add_message(Message(input_text, "user"))
+                        self.add_message(Message(final_answer, "assistant"))
+                        return
 
                     # 添加助手消息到历史
                     messages.append({
@@ -484,55 +591,79 @@ class LoopAgent(Agent):
                         "tool_calls": serialize_tool_calls(tool_calls)
                     })
 
-                    # 执行工具调用
-                    for tool_call in tool_calls:
-                        tool_name = tool_call.function.name
-                        tool_call_id = tool_call.id
+                    # 异步并行执行工具调用
+                    tool_results = await self._execute_tools_async(
+                        tool_calls,
+                        current_iteration,
+                        on_tool_call
+                    )
 
-                        try:
-                            arguments = parse_tool_arguments(tool_call)
-                        except json.JSONDecodeError:
-                            continue
+                    # 发送工具结果事件并添加到消息
+                    for tool_name, tool_call_id, result_dict in tool_results:
+                        yield StreamEvent.create(
+                            StreamEventType.TOOL_CALL_FINISH,
+                            self.name,
+                            tool_name=tool_name,
+                            tool_call_id=tool_call_id,
+                            result=result_dict["content"],
+                            iteration=current_iteration
+                        )
 
-                        # 执行工具
-                        result = self._execute_tool_call(tool_name, arguments)
-
-                        # 添加工具结果到消息
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call_id,
-                            "content": result
+                            "content": result_dict["content"]
                         })
 
+                    # 发送步骤完成事件
+                    yield StreamEvent.create(
+                        StreamEventType.STEP_FINISH,
+                        self.name,
+                        iteration=current_iteration
+                    )
+
+                    await self._emit_event(
+                        EventType.STEP_FINISH,
+                        on_step,
+                        step=current_iteration,
+                        tool_calls=len(tool_calls)
+                    )
+
                 except Exception as e:
-                    error_msg = f"LLM 调用失败: {str(e)}"
+                    error_msg = f"工具执行失败: {str(e)}"
                     yield StreamEvent.create(
                         StreamEventType.ERROR,
                         self.name,
                         error=error_msg,
                         iteration=current_iteration
                     )
+                    await self._emit_event(EventType.AGENT_ERROR, on_error, error=error_msg)
                     raise
 
-            # 发送完成事件
+            # 达到最大迭代次数
             yield StreamEvent.create(
                 StreamEventType.AGENT_FINISH,
                 self.name,
                 result=full_response,
                 total_steps=current_iteration,
-                max_steps_reached=current_iteration >= self.max_iterations
+                max_steps_reached=True
             )
-
-            # 保存到历史
+            await self._emit_event(
+                EventType.AGENT_FINISH,
+                on_finish,
+                result=full_response,
+                status="timeout"
+            )
             self.add_message(Message(input_text, "user"))
             self.add_message(Message(full_response, "assistant"))
 
         except Exception as e:
-            # 发送错误事件
+            error_msg = f"Agent 执行失败: {str(e)}"
             yield StreamEvent.create(
                 StreamEventType.ERROR,
                 self.name,
-                error=str(e),
+                error=error_msg,
                 error_type=type(e).__name__
             )
+            await self._emit_event(EventType.AGENT_ERROR, on_error, error=error_msg)
             raise

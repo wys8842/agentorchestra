@@ -53,8 +53,10 @@ class SkillTool(Tool):
                 - 开始领域特定工作之前
                 - 需要模型不具备的专业知识时
 
+
                 注意：加载技能后，请严格遵循技能说明来完成用户任务。""",
-            expandable=False
+            expandable=False,
+            read_only=True
         )
         self.skill_loader = skill_loader
 

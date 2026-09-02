@@ -1,4 +1,4 @@
-"""GraphStore - 图存储（对标 Palantir Vertex）
+"""GraphStore - 图存储
 
 存储对象间关系，支持图遍历和传递推理。
 对象存储（ObjectStore）用它做链接查询和关系分析。
@@ -51,12 +51,36 @@ class GraphStore:
             "rel": rel, "target": obj, "props": props or {}
         })
 
+    def remove_node(self, name: str) -> bool:
+        """删除节点及其所有关联边
+
+        Args:
+            name: 节点名称
+
+        Returns:
+            True if node existed and was deleted, False otherwise
+        """
+        if name not in self._nodes:
+            return False
+
+        # 删除节点
+        self._nodes.pop(name, None)
+
+        # 删除所有指向该节点的边
+        for source, edges in list(self._edges.items()):
+            self._edges[source] = [e for e in edges if e["target"] != name]
+
+        # 删除该节点发出的所有边
+        self._edges.pop(name, None)
+
+        return True
+
     # ==================== 查询 ====================
 
     def get_node(self, name: str) -> Optional[Dict[str, Any]]:
         return self._nodes.get(name)
 
-    def get_related(self, node_name: str, rel: str = None) -> List[Dict[str, Any]]:
+    def get_related(self, node_name: str, rel: Optional[str] = None) -> List[Dict[str, Any]]:
         """获取节点的直接关联"""
         related = []
         for edge in self._edges.get(node_name, []):

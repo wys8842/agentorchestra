@@ -1,4 +1,4 @@
-# ontology - 企业级 Ontology（对标 Palantir）
+# ontology - 企业级 Ontology
 
 把业务世界建模为可操作的对象/动作/函数/接口，配合治理与执行编排，
 作为 Agent 的"外部大脑"和业务语义层。
@@ -28,7 +28,7 @@ ontology/
 │   ├── scheduler.py     # Scheduler（定时触发）
 │   └── transaction.py   # TransactionManager（事务补偿）
 ├── query_engine.py  # 跨对象/接口查询
-├── tool_gen.py      # 对象/动作/函数 → Tool
+├── tool_generator.py      # 对象/动作/函数 → Tool
 └── engine.py        # OntologyEngine（统一入口）
 ```
 

@@ -1,4 +1,4 @@
-"""Interface - 接口（对标 Palantir Interface）
+"""Interface - 接口
 
 对象类型多态：描述对象类型的形状（要求的属性），
 多个对象类型可实现同一接口 → 统一建模和查询。

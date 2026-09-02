@@ -1,4 +1,4 @@
-"""动能层 - 定义组织的写操作与业务逻辑（对标 Palantir Kinetic elements）"""
+"""动能层 - 定义组织的写操作与业务逻辑"""
 
 from .action import ActionType
 from .function import Function, derived_property

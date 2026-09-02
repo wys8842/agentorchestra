@@ -3,9 +3,10 @@
 支持从环境变量和 JSON 文件加载配置，提供密钥脱敏。
 """
 
-import json
 import os
 from typing import Any, Dict, Optional
+
+from .utils import safe_json_load
 
 # 需要脱敏的配置键（API Key、密钥等）
 SENSITIVE_KEYS = {
@@ -52,8 +53,7 @@ class ConfigLoader:
         """
         if not os.path.exists(path):
             return {}
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+        data = safe_json_load(path, default={})
         if not isinstance(data, dict):
             return {}
         return data
@@ -111,6 +111,7 @@ def _known_config_keys() -> list:
         "max_history_length",
         "context_window", "compression_threshold", "min_retain_rounds",
         "enable_smart_compression",
+        "context_builder_enabled", "context_builder_max_tokens",
         "summary_llm_provider", "summary_llm_model",
         "summary_max_tokens", "summary_temperature",
         "tool_output_max_lines", "tool_output_max_bytes",
@@ -121,12 +122,19 @@ def _known_config_keys() -> list:
         "mcp_enabled", "mcp_config_file",
         "ontology_engine_enabled", "ontology_engine_module",
         "ontology_default_principal", "ontology_default_roles",
+        "ontology_backend", "ontology_db_path",
+        "circuit_enabled", "circuit_failure_threshold",
+        "circuit_recovery_timeout",
         "session_enabled", "session_dir", "auto_save_enabled",
         "auto_save_interval",
         "subagent_enabled", "subagent_max_steps",
+        "subagent_use_light_llm", "subagent_light_llm_provider",
+        "subagent_light_llm_model",
         "todowrite_enabled", "devlog_enabled",
         "async_enabled", "max_concurrent_tools", "hook_timeout_seconds",
+        "llm_async_timeout", "tool_async_timeout",
         "stream_enabled", "stream_buffer_size",
+        "stream_include_thinking", "stream_include_tool_calls",
     ]
 
 
