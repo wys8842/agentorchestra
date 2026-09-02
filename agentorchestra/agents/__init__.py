@@ -1,7 +1,7 @@
 """Agent实现模块 - Symphony原生Agent范式"""
 
-# 子代理机制（第06章）
 from .factory import create_agent, default_subagent_factory
+from .loop_agent import LoopAgent
 from .plan_solve_agent import PlanSolveAgent
 from .react_agent import ReActAgent
 from .reflection_agent import ReflectionAgent
@@ -16,6 +16,7 @@ __all__ = [
     "ReflectionAgent",
     "PlanSolveAgent",
     "PlanAndSolveAgent",  # 向后兼容
+    "LoopAgent",  # 新增
 
     # 子代理工厂函数
     "create_agent",

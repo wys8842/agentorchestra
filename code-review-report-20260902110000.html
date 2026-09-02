@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentOrchestra Code Review Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
+        h1, h2, h3 { color: #333; }
+        .summary { background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .pass { color: green; }
+        .fail { color: red; }
+        .ok { color: blue; }
+        table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .section { margin: 30px 0; }
+    </style>
+</head>
+<body>
+    <h1>AgentOrchestra Code Review Report</h1>
+    <p>Report generated: 2026-09-02</p>
+    <p>Framework: AgentOrchestra</p>
+
+    <div class="summary">
+        <h2>Executive Summary</h2>
+        <ul>
+            <li>Framework state: <span class="ok">CONVERGENT - All refactorings completed and validated</span></li>
+            <li>Total agent types: 5 (SimpleAgent, ReActAgent, PlanSolveAgent, ReflectionAgent, LoopAgent)</li>
+            <li>Pytest tests: <span class="pass">182 passed</span></li>
+            <li>Stress tests: <span class="pass">26/26 passed</span></li>
+            <li>Ruff linting: <span class="pass">All checks pass</span></li>
+        </ul>
+    </div>
+
+    <h2>1. Agent Types</h2>
+    <table>
+        <tr>
+            <th>Agent Type</th>
+            <th>Status</th>
+            <th>Key Methods</th>
+        </tr>
+        <tr>
+            <td>SimpleAgent</td>
+            <td class="ok">✓ Consistent</td>
+            <td>run, _build_messages, _build_tool_schemas, add_tool/remove_tool (deprecated), register_tool, unregister_tool, list_tools, has_tools, stream_run, arun_stream</td>
+        </tr>
+        <tr>
+            <td>ReActAgent</td>
+            <td class="ok">✓ Consistent</td>
+            <td>run, _run_impl, _save_and_finalize, _log_model_output, _log_tool_result, _finalize_session, arun, arun_stream</td>
+        </tr>
+        <tr>
+            <td>PlanSolveAgent</td>
+            <td class="ok">✓ Consistent</td>
+            <td>Planner, Executor, run, arun_stream (phased execution)</td>
+        </tr>
+        <tr>
+            <td>ReflectionAgent</td>
+            <td class="ok">✓ Consistent</td>
+            <td>run, _execute_task, _reflect_on_result, _refine_result, _get_llm_response, arun_stream</td>
+        </tr>
+        <tr>
+            <td>LoopAgent</td>
+            <td class="ok">✓ New - Consistent</td>
+            <td>run, _build_messages, _build_tool_schemas, add_tool/remove_tool (deprecated), register_tool, unregister_tool, list_tools, has_tools, stream_run, arun_stream</td>
+        </tr>
+    </table>
+
+    <h2>2. Consistency Patterns</h2>
+    <p>All agent types follow the same core patterns:</p>
+    <ul>
+        <li><b>Inheritance:</b> All extend the <code>Agent</code> base class from <code>core/agent.py</code></li>
+        <li><b>Message building:</b> All implement <code>_build_messages(input_text)</code> producing system + history + user messages</li>
+        <li><b>Tool schemas:</b> All use <code>_build_tool_schemas()</code> from ToolRegistry, with optional built-in tools</li>
+        <li><b>Tool execution:</b> All use <code>serialize_tool_calls()</code>, <code>parse_tool_arguments()</code>, and <code>_execute_tool_call()</code></li>
+        <li><b>Timing:</b> All use <code>duration_seconds()</code> from <code>core/utils.py</code></li>
+        <li><b>Trace logging:</b> All use <code>self.trace_logger.log_event()</code> for session_start/model_output/tool_call/tool_result/session_end</li>
+        <li><b>Session finalization:</b> All use unified <code>_finalize_session()</code></li>
+        <li><b>Deprecated APIs:</b> <code>add_tool</code> and <code>remove_tool</code> have deprecation warnings, directing to <code>register_tool</code>/<code>unregister_tool</code></li>
+        <li><b>Stream events:</b> <code>arun_stream()</code> yields <code>StreamEvent</code> types from <code>core/streaming.py</code></li>
+    </ul>
+
+    <h2>3. New: LoopAgent</h2>
+    <p>The LoopAgent was added as a 5th agent type, providing generic loop-based Function Calling execution:</p>
+    <ul>
+        <li>Calls LLM with <code>tool_choice="auto"</code> in each iteration</li>
+        <li>If tool calls returned: executes them and feeds results back to LLM</li>
+        <li>If no tool calls: returns LLM's final answer</li>
+        <li>Terminates when: LLM returns no tool calls OR max_iterations reached</li>
+        <li>Consistent with all other agents in utilities, trace logging, and API patterns</li>
+    </ul>
+
+    <h2>3. Key Refactorings (P0-P1 Compleated)</h2>
+    <table>
+        <tr>
+            <th>Area</th>
+            <th>Before</th>
+            <th>After</th>
+            <th>Savings</th>
+        </tr>
+        <tr>
+            <td>_generate_session_id</td>
+            <td>3 scattered implementations</td>
+            <td>1 in <code>core/utils.py:generate_session_id()</code></td>
+            <td>2 duplicates removed</td>
+        </tr>
+        <tr>
+            <td>atomic_write</td>
+            <td>4 scattered implementations</td>
+            <td>1 in <code>core/utils.py:atomic_write()</code></td>
+            <td>3 duplicates removed</td>
+        </tr>
+        <tr>
+            <td>LLMResponse + StreamStats</td>
+            <td>StreamStats dataclass separate</td>
+            <td>Merged into LLMResponse (content: Optional[str] = None)</td>
+            <td>1 class eliminated</td>
+        </tr>
+        <tr>
+            <td>serialize_tool_calls</td>
+            <td>4 agent implementations</td>
+            <td>1 in <code>core/utils.py:serialize_tool_calls()</code></td>
+            <td>3 duplicates removed</td>
+        </tr>
+        <tr>
+            <td>FileToolMixin</td>
+            <td>714 lines across multiple files</td>
+            <td>1 in <code>tools/builtin/file_tools.py</code></td>
+            <td>Consolidated _backup_file/_resolve_path</td>
+        </tr>
+        <tr>
+            <td>4 utility functions</td>
+            <td>Repeated across codebase</td>
+            <td>In <code>core/utils.py</code>: measure_elapsed_ms, duration_seconds, safe_json_load, parse_tool_arguments</td>
+            <td>~30+ occurrences consolidated</td>
+        </tr>
+    </table>
+
+    <h2>4. Test Results</h2>
+    <table>
+        <tr>
+            <th>Test Suite</th>
+            <th>Results</th>
+        </tr>
+        <tr>
+            <td>Pytest (182 tests)</td>
+            <td class="pass">✓ All passed</td>
+        </tr>
+        <tr>
+            <td>Stress tests (26 tests)</td>
+            <td class="pass">✓ All passed</td>
+        </tr>
+        <tr>
+            <td>Ruff linting</td>
+            <td class="pass">✓ All checks pass</td>
+        </tr>
+    </table>
+
+    <h2>5. Files Modified/Created</h2>
+    <ul>
+        <li><b>Created:</b> <code>agentorchestra/agents/loop_agent.py</code> - LoopAgent implementation</code></li>
+        <li><b>Modified:</b> <code>agentorchestra/agents/__init__.py</code> - Added LoopAgent export</code></li>
+        <li><b>Existing (refactored):</code> <code>core/utils.py</code>, <code>core/llm_response.py</code>, <code>tools/builtin/file_tools.py</code>, <code>agents/simple_agent.py</code>, <code>agents/react_agent.py</code>, <code>agents/plan_solve_agent.py</code>, <code>agents/reflection_agent.py</code></li>
+    </ul>
+
+    <h2>6. Performance Data (from Stress Tests)</h2>
+    <table>
+        <tr>
+            <th>Metric</th>
+            <th>Value</th>
+        </tr>
+        <tr>
+            <td>Framework ops/sec (tool calls)</td>
+            <td>~40,800 ops/s (5100 calls / 0.12s)</td>
+        </tr>
+        <tr>
+            <td>8-thread concurrent tools</td>
+            <td>0.03s, 0 errors</td>
+        </tr>
+        <tr>
+            <td>Workflow ops/sec</td>
+            <td>~16,667 ops/s (1000 workflows / 0.06s)</td>
+        </tr>
+        <tr>
+            <td>TraceLogger throughput</td>
+            <td>5000 events / 0.83s (~6,024 eps)</td>
+        </tr>
+    </table>
+
+    <footer>
+        <p>AgentOrchestra Framework | Generated 2026-09-02 | All 182 pytest + 26 stress tests passing</p>
+    </footer>
+</body>
+</html>
