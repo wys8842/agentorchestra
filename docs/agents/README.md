@@ -1,6 +1,6 @@
 # agents - Agent 范式
 
-四种 Agent 实现，继承 `core/agent.py` 的 `Agent` 基类，通过 `agents/factory.py` 工厂创建。
+五种 Agent 实现，继承 `core/agent.py` 的 `Agent` 基类，通过 `agents/factory.py` 工厂创建。
 
 ## Agent 类型
 
@@ -10,6 +10,9 @@
 | `ReActAgent` | 推理-行动 | Thought/Finish 伪工具 + Function Calling，工具循环 |
 | `ReflectionAgent` | 反思迭代 | 生成→反思→优化循环（Self-Refine） |
 | `PlanSolveAgent` | 规划-执行 | Planner 生成计划 → Executor 逐步执行 |
+| `LoopAgent` | 循环执行 | 通用 Function Calling 循环（无预设推理模板） |
+
+> 所有 Agent 都提供同步 `run()` 与异步 `arun()`；`LoopAgent` 亦可作为通用多轮工具交互替代方案。
 
 ## 创建与使用
 
@@ -59,7 +62,8 @@ from agentorchestra.agents.reflection_agent import ReflectionAgent
 agent = ReflectionAgent(
     name="reflector",
     llm=llm,
-    max_iterations=3,   # 反思迭代次数
+    max_steps=3,        # 最大反思迭代次数
+    tool_registry=registry,   # 可选：反思过程中也支持工具调用
 )
 result = agent.run("写一个高质量方案")
 ```
@@ -71,11 +75,27 @@ result = agent.run("写一个高质量方案")
 ```python
 from agentorchestra.agents.plan_solve_agent import PlanSolveAgent
 
-agent = PlanSolveAgent(name="planner", llm=llm)
+agent = PlanSolveAgent(name="planner", llm=llm, tool_registry=registry)
 result = agent.run("实现一个推荐系统")
 ```
 
 **流程**：Planner 生成步骤计划 → Executor 按计划逐步执行。
+
+### 5. LoopAgent
+
+```python
+from agentorchestra.agents.loop_agent import LoopAgent
+
+agent = LoopAgent(
+    name="loop",
+    llm=llm,
+    tool_registry=registry,
+    max_steps=5,        # 最大循环迭代次数
+)
+result = agent.run("帮我多轮查询并汇总结果")
+```
+
+**流程**：LLM Function Calling → 执行工具 → 结果反馈 → 继续循环，直到无工具调用或达到 `max_steps`。
 
 ## 工厂创建
 
@@ -83,12 +103,14 @@ result = agent.run("实现一个推荐系统")
 from agentorchestra.agents.factory import create_agent, default_subagent_factory
 
 agent = create_agent(
-    agent_type="react",      # react/reflection/plan/simple
+    agent_type="react",   # react/reflection/plan/simple/loop
     name="sub",
     llm=llm,
     tool_registry=registry,
 )
 ```
+
+> `agents/__init__.py` 另导出 `PlanAndSolveAgent`（`PlanSolveAgent` 向后兼容别名）。
 
 ## 子代理机制
 

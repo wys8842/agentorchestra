@@ -25,17 +25,25 @@
 | `ratelimit.py` | 限流：TokenBucket / SlidingWindow / RateLimiter |
 | `health.py` | `HealthCheck`：健康检查（组件状态聚合报告） |
 | `monitor.py` | `MonitorServer`：监控 HTTP 端点（/metrics /health /traces） |
+| `utils.py` | 通用工具：时长度量 / 工具参数解析 / 序列化辅助 |
+
+> 模块级导出见 [core/__init__.py](../../agentorchestra/core/__init__.py)，另含 `StreamStats`（`LLMResponse` 的向后兼容别名）。
 
 ## 核心概念
 
 ### 1. SymphonyLLM
 
-统一 LLM 接口，屏蔽多提供商差异：
+统一 LLM 接口，按 `base_url` 自动识别提供商（OpenAI / Anthropic / Gemini 及兼容接口）：
 
 ```python
 from agentorchestra.core.llm import SymphonyLLM
 
-llm = SymphonyLLM(provider="openai", model="gpt-4o", api_key="sk-xxx")
+# 必填：model / api_key / base_url（也可用 LLM_MODEL_ID/LLM_API_KEY/LLM_BASE_URL 环境变量）
+llm = SymphonyLLM(
+    model="gpt-4o",
+    api_key="sk-xxx",
+    base_url="https://api.openai.com/v1",
+)
 response = llm.invoke([{"role": "user", "content": "你好"}])
 print(response.content)
 
@@ -44,6 +52,11 @@ response = llm.invoke_with_tools(messages, tools=[schema], tool_choice="auto")
 
 # 流式
 for chunk in llm.stream_invoke(messages):
+    print(chunk, end="")
+
+# 异步
+await llm.ainvoke(messages)
+async for chunk in llm.astream_invoke(messages):
     print(chunk, end="")
 ```
 

@@ -10,7 +10,7 @@ Agent 的能力扩展系统：Tool 定义、注册表、统一执行、内置工
 | `registry.py` | `ToolRegistry`：注册/查找/执行工具，熔断器 |
 | `response.py` | `ToolResponse` / `ToolStatus`：统一返回协议 |
 | `errors.py` | `ToolErrorCode`：标准化错误码 |
-| `tool_filter.py` | `ToolFilter`：子代理工具权限控制 |
+| `tool_filter.py` | 子代理工具权限控制：`BaseToolFilter` / `ReadOnlyFilter` / `FullAccessFilter` / `CustomFilter` |
 | `circuit_breaker.py` | 熔断器（连续失败保护） |
 | `builtin/` | 内置工具集合 |
 

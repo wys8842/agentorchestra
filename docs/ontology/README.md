@@ -7,36 +7,39 @@
 
 ```
 ontology/
-├── semantic/       # 语义层
-│   ├── object_type.py   # ObjectType/Property(ToolParameter)/LinkType
-│   ├── interface.py     # Interface（多态）
+├── semantic/        # 语义层
+│   ├── object_type.py   # ObjectType（对象类型：主键/属性/链接）
+│   ├── link_type.py     # LinkType（对象间链接：方向/基数）
+│   ├── interface.py     # Interface（多态/跨类型契约）
 │   └── vocabulary.py    # VocabularyValidator（统一词汇校验）
-├── kinetic/        # 动能层
+├── kinetic/         # 动能层
 │   ├── action.py        # ActionType（参数/规则/副作用/审计）
 │   └── function.py      # Function / derived_property
-├── storage/        # 存储层
+├── storage/         # 存储层
 │   ├── object_store.py  # ObjectStore（对象存储）
 │   ├── index.py         # ObjectIndex（搜索/过滤/聚合）
 │   ├── graph_store.py   # GraphStore（图遍历/传递推理）
+│   ├── backends.py      # 存储后端：MemoryBackend / SQLiteBackend
 │   └── materialization.py # 物化（编辑回写）
-├── governance/     # 治理层
-│   ├── security.py      # SecurityManager/SecurityContext
+├── governance/      # 治理层
+│   ├── security.py      # SecurityManager/SecurityContext/PermissionRule
 │   ├── audit.py         # AuditManager
 │   └── branching.py     # BranchManager（分支/回滚）
-├── process/        # 执行编排层
-│   ├── workflow.py      # WorkflowEngine（多动作编排）
-│   ├── scheduler.py     # Scheduler（定时触发）
-│   └── transaction.py   # TransactionManager（事务补偿）
+├── process/         # 执行编排层
+│   ├── workflow.py      # WorkflowEngine（Workflow/StepNode/ConditionNode/ParallelNode）
+│   ├── scheduler.py     # Scheduler / ScheduledTask（定时触发）
+│   └── transaction.py   # TransactionManager（Saga 事务补偿）
 ├── query_engine.py  # 跨对象/接口查询
-├── tool_generator.py      # 对象/动作/函数 → Tool
+├── tool_generator.py # 对象/动作/函数 → Tool（Query/Action/Call 三类工具）
 └── engine.py        # OntologyEngine（统一入口）
 ```
 
-## 四种原语（核心建模）
+## 建模原语
 
 | 原语 | 回答 | 用途 |
 |------|------|------|
-| **ObjectType** | 业务实体长什么样 | 定义对象（主键/属性/链接） |
+| **ObjectType** | 业务实体长什么样 | 定义对象（主键/属性/链接，属性复用 `ToolParameter`） |
+| **LinkType** | 对象间如何关联 | 定义关系（源/目标类型 + 基数，`ONE_TO_MANY` 等） |
 | **ActionType** | 对对象做什么改变 | 写操作（规则/副作用/审计） |
 | **Function** | 怎么计算新信息 | 纯计算（无副作用） |
 | **Interface** | 多类型统一形状 | 抽象契约（跨类型） |
@@ -45,17 +48,22 @@ ontology/
 
 ```python
 from agentorchestra.ontology import (
-    ObjectType, ActionType, Function, Interface, OntologyEngine,
+    ObjectType, LinkType, ActionType, Function, Interface, OntologyEngine,
     SecurityContext, Workflow, StepNode,
 )
 from agentorchestra.tools.base import ToolParameter
 from agentorchestra.tools.registry import ToolRegistry
 
-# ① 定义对象类型
+# ① 定义对象类型（属性复用 ToolParameter）
 Customer = ObjectType("customer", "customer_id", properties=[
     ToolParameter(name="customer_id", type="string", description="ID", required=True),
     ToolParameter(name="name", type="string", description="客户名", required=True),
 ])
+
+# 对象间链接（可选）
+Customer.add_link_type(LinkType(
+    name="orders", from_type="customer", to_type="order",
+    cardinality="ONE_TO_MANY"))
 
 # ② 定义动作
 def exec_create(params, ctx):
@@ -80,7 +88,7 @@ engine.allow(["agent"], resource="*", action="*")
 # ⑤ 挂载给 Agent（解耦，任何 Agent 可用）
 registry = ToolRegistry()
 engine.mount(registry)
-# → QueryCustomer / create_customer / CallComputeDiscount
+# → QueryCustomer（查询）/ create_customer（动作）/ CallComputeDiscount（函数）
 ```
 
 ## 治理能力
@@ -104,10 +112,14 @@ engine.switch_branch("before_change")
 ```python
 # ① 流程（Workflow）
 wf = Workflow("fulfill")
-wf.add_node(StepNode("s1", "create_customer", {"name": "$input.name"}), entry=True)
-wf.add_node(StepNode("s2", "compute_discount", {"amount": "$s1.amount"}, depends_on=["s1"]))
+wf.add_node(StepNode("s1", "create_customer",
+                     {"name": "$input"}), entry=True)          # "$key" 取初始参数
+wf.add_node(StepNode("s2", "compute_discount",
+                     {"amount": "$s1.amount"}, depends_on=["s1"]))  # "$node.field" 取前序结果
 engine.workflow.register_workflow(wf)
-engine.workflow.run("fulfill", {"input": {"name": "张三"}}, ctx={"object_store": store})
+engine.workflow.run("fulfill",
+                    {"input": "张三"},                          # 初始参数
+                    ctx={"object_store": store})                # 执行上下文
 
 # ② 调度（Scheduler）
 engine.scheduler.add_interval("heartbeat", my_func, interval_seconds=60)
@@ -124,7 +136,7 @@ engine.transaction.execute([
 ## 与 Agent 解耦
 
 `OntologyEngine.mount(registry)` 只依赖 `ToolRegistry` 契约，不绑定 Agent 类型：
-ReActAgent / SimpleAgent / ReflectionAgent / PlanSolveAgent 及子代理通过基类自动获得能力。
+ReActAgent / SimpleAgent / ReflectionAgent / PlanSolveAgent / LoopAgent 及子代理通过基类自动获得能力。
 
 ## 校验能力
 

@@ -68,10 +68,13 @@ context = builder.build(
 ```
 
 **GSSC 四阶段**：
-- **Gather**：收集候选（系统指令 + 最近历史 + 知识包）
+- **Gather**：收集候选（系统指令 + 最近历史 + 知识包 + 额外包）
 - **Select**：相关性 + 新近性打分，预算填充
-- **Structure**：组织成 `[Role]/[Task]/[State]/[Evidence]/[Context]/[Output]`
+- **Structure**：组织成 `[Role & Policies]/[Task]/[State]/[Evidence]/[Context]/[Output]`
 - **Compress**：超预算按行截断
+
+> `ContextBuilder` 目前作为可选能力（`Config.context_builder_enabled=True` 时启用），主链路仍由
+> `HistoryManager` + `TokenCounter` + `ObservationTruncator` 支撑。
 
 ## 5. ObservationTruncator — 工具输出截断
 

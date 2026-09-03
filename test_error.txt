@@ -1,8 +1,0 @@
-Traceback (most recent call last):
-  File "D:\proj\agentorchestra\stress_test.py", line 32, in <module>
-    section("① ObjectStore 多线程并发写入")
-    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "D:\proj\agentorchestra\stress_test.py", line 27, in section
-    print("\u25b6 " + t)
-    ~~~~~^^^^^^^^^^
-UnicodeEncodeError: 'gbk' codec can't encode character '\u25b6' in position 0: illegal multibyte sequence
