@@ -103,6 +103,21 @@ class Config(BaseModel):
     stream_include_thinking: bool = True  # 是否包含思考过程
     stream_include_tool_calls: bool = True  # 是否包含工具调用
 
+    # 记忆系统配置（v1：跨会话持久记忆）
+    memory_enabled: bool = False  # 主开关
+    memory_backend: str = "sqlite"  # sqlite / jsonl / memory
+    memory_db_path: str = "memory/memories.db"  # SQLite 文件
+    memory_jsonl_path: str = "memory/memories.jsonl"  # JSONL 文件
+
+    memory_auto_register_tools: bool = True  # 启动时自动注册 MemorySave/Recall 工具
+    memory_auto_recall: bool = True  # run 开始自动注入相关记忆
+    memory_auto_summarize: bool = False  # run 结束自动提炼（默认关闭，隐式 LLM 成本）
+
+    memory_recall_top_k: int = 5
+    memory_embedding_enabled: bool = True  # 关闭则纯关键词
+    memory_dedup_threshold: float = 0.92  # 写入去重相似度阈值
+    memory_max_entries: int = 10000  # 容量上限（v1 仅记录统计）
+
     @classmethod
     def from_env(cls, env_prefix: str = "") -> "Config":
         """从环境变量创建配置

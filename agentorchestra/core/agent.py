@@ -45,7 +45,7 @@ class Agent(ABC):
     ):
         self.name = name
         self.llm = llm
-        self.system_prompt = system_prompt
+        self._system_prompt_base = system_prompt
         self.config = config or Config()
 
         # 工具注册表（可选）
@@ -200,6 +200,29 @@ class Agent(ABC):
 
         self._start_time = datetime.now()
 
+        # 新增：跨会话持久记忆系统（v1）
+        from agentorchestra.memory import MemoryManager
+        from agentorchestra.memory.tools import MemorySaveTool, MemoryRecallTool
+
+        self.memory_manager: Optional[MemoryManager] = None
+        self._memory_inject_prefix: str = ""
+        if self.config.memory_enabled:
+            try:
+                self.memory_manager = MemoryManager.from_config(self.config, llm=self.llm)
+            except Exception as e:
+                self.logger.warning(f"记忆系统未启用（{e}）")
+            else:
+                if (
+                    self.memory_manager
+                    and self.config.memory_auto_register_tools
+                    and self.tool_registry
+                ):
+                    try:
+                        self.tool_registry.register_tool(MemorySaveTool(self.memory_manager))
+                        self.tool_registry.register_tool(MemoryRecallTool(self.memory_manager))
+                    except Exception as e:
+                        self.logger.warning(f"记忆工具注册失败: {e}")
+
         # 新增：子代理机制组件
         if self.config.subagent_enabled and self.tool_registry:
             self._register_task_tool()
@@ -211,6 +234,19 @@ class Agent(ABC):
         # 新增：DevLog 开发日志组件
         if self.config.devlog_enabled and self.tool_registry:
             self._register_devlog_tool()
+
+    @property
+    def system_prompt(self) -> str:
+        """返回含记忆前缀的最终 system_prompt（向后兼容：子类直接读取 self.system_prompt）。"""
+        base = self._system_prompt_base or ""
+        prefix = getattr(self, "_memory_inject_prefix", "") or ""
+        if not prefix:
+            return base
+        return (prefix + "\n\n" + base).strip() if base else prefix
+
+    @system_prompt.setter
+    def system_prompt(self, value: Optional[str]) -> None:
+        self._system_prompt_base = value
 
     @property
     def _history(self) -> List[Message]:
@@ -273,6 +309,23 @@ class Agent(ABC):
             input_text=input_text
         )
 
+        # 记忆自动注入：把相关历史记忆拼到 system_prompt 之后
+        self._memory_inject_prefix = ""
+        if (
+            self.memory_manager
+            and self.config.memory_auto_recall
+            and input_text
+        ):
+            try:
+                recalled = self.memory_manager.recall(
+                    input_text,
+                    top_k=self.config.memory_recall_top_k,
+                )
+                if recalled:
+                    self._memory_inject_prefix = self._format_memory_prefix(recalled)
+            except Exception as e:
+                self.logger.warning(f"记忆回忆失败: {e}")
+
         try:
             # 默认实现：在线程池中运行同步 run()
             loop = asyncio.get_running_loop()
@@ -287,6 +340,16 @@ class Agent(ABC):
                 on_finish,
                 result=result
             )
+
+            # 记忆自动总结（默认关闭）
+            if (
+                self.memory_manager
+                and self.config.memory_auto_summarize
+            ):
+                try:
+                    await self._auto_memorize(input_text, result)
+                except Exception as e:
+                    self.logger.warning(f"自动总结失败: {e}")
 
             return result
 
@@ -383,6 +446,58 @@ class Agent(ABC):
                         "hook_error",
                         {"event_type": event_type.value, "error": str(e)}
                     )
+
+    # ==================== 记忆辅助方法 ====================
+
+    def _format_memory_prefix(self, entries: List[Any]) -> str:
+        """把 recall 命中的记忆拼成固定前缀（注入到 system_prompt 之后）。"""
+        if not entries:
+            return ""
+        lines = ["以下是与该任务相关的过往记忆（来自历史会话）："]
+        for i, e in enumerate(entries, 1):
+            type_val = e.type.value if hasattr(e.type, "value") else str(e.type)
+            tags = ", ".join(e.tags) if e.tags else "-"
+            lines.append(
+                f"- [{type_val}] (importance={e.importance:.1f}, tags=[{tags}]) {e.content}"
+            )
+        lines.append("若与当前任务无关可忽略。")
+        return "\n".join(lines)
+
+    def _effective_system_prompt(self) -> str:
+        """返回含记忆前缀的最终 system_prompt。"""
+        prefix = self._memory_inject_prefix or ""
+        base = self.system_prompt or ""
+        if not prefix:
+            return base
+        return (prefix + "\n\n" + base).strip() if base else prefix
+
+    async def _auto_memorize(self, input_text: str, result: str) -> None:
+        """调 Summarizer 提炼本轮记忆并入库（仅 memory_auto_summarize=True 时触发）。"""
+        from agentorchestra.memory.summarizer import Summarizer
+
+        if not self.memory_manager:
+            return
+        try:
+            history = self.history_manager.get_history() if self.history_manager else []
+            summarizer = Summarizer(llm=self.llm)
+            candidates = await summarizer.extract(input_text, history, result)
+            if not candidates:
+                return
+            ids = self.memory_manager.remember_batch(
+                [
+                    {
+                        "content": c.content,
+                        "type": c.type,
+                        "tags": c.tags,
+                        "importance": c.importance,
+                    }
+                    for c in candidates
+                ]
+            )
+            if ids:
+                self.logger.info(f"自动总结写入 {len(ids)} 条记忆")
+        except Exception as e:
+            self.logger.warning(f"自动记忆写入失败: {e}")
 
     def add_message(self, message: Message):
         """添加消息到历史记录

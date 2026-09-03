@@ -12,8 +12,9 @@ dist/
 .coverage
 htmlcov/
 
-# 运行时产物
-memory/
+# 运行时产物（仓库根 memory/ 下的数据目录；agentorchestra/memory/ 源码不受影响）
+memory/*
+!memory/.gitkeep
 tool-output/
 logs/
 *.db

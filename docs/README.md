@@ -13,6 +13,7 @@
 | [context](context/README.md) | 上下文工程：历史、压缩、Token 计数、GSSC | 上下文管理 |
 | [observability](observability/README.md) | 可观测性：Trace 记录、事件系统 | 审计与观测 |
 | [ontology](ontology/README.md) | 企业级 Ontology：对象/动作/函数/接口/治理/流程 | 业务语义层 |
+| [memory](memory/README.md) | 跨会话持久记忆：长期/短期之外的"跨任务记忆" | 持久化与回忆 |
 
 ## 架构总览
 
@@ -40,6 +41,7 @@
 - **执行编排**：Workflow（流程）、Scheduler（调度）、Transaction（事务补偿）
 - **工具生态**：内置工具（文件/计算/子代理/技能/MCP）+ 自定义 Tool
 - **Skills 知识外化**：渐进式披露（元数据 + 按需 body），大幅节省 Token
+- **跨会话持久记忆**：混合检索（关键词+向量）+ 自动注入/主动工具调用
 - **可观测**：TraceLogger 双格式（JSONL+HTML）审计，事件系统实时回调
 - **上下文工程**：历史管理、Token 预算、压缩、GSSC 流水线
 

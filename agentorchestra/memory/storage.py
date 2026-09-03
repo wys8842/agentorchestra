@@ -1,0 +1,429 @@
+"""存储层 - 三种后端 + MemoryStore 包装
+
+- BaseMemoryBackend: 抽象接口
+- InMemoryBackend: 进程内
+- JsonlBackend: JSONL 文件（追加式，可读）
+- SqliteBackend: SQLite 文件（跨进程安全 + WAL）
+- MemoryStore: 业务层统一入口
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import struct
+import threading
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+
+from .models import MemoryEntry
+
+logger = logging.getLogger("agentorchestra.memory.storage")
+
+
+def _pack_vector(vec: List[float]) -> bytes:
+    """将向量打包为二进制（little-endian float32 数组）。"""
+    return struct.pack(f"<{len(vec)}f", *vec)
+
+
+def _unpack_vector(buf: bytes) -> List[float]:
+    """解包二进制向量。"""
+    n = len(buf) // 4
+    return list(struct.unpack(f"<{n}f", buf))
+
+
+class BaseMemoryBackend(ABC):
+    """存储后端抽象接口。"""
+
+    @abstractmethod
+    def upsert(self, entry: MemoryEntry) -> None: ...
+
+    @abstractmethod
+    def get(self, entry_id: str) -> Optional[MemoryEntry]: ...
+
+    @abstractmethod
+    def delete(self, entry_id: str) -> bool: ...
+
+    @abstractmethod
+    def all(self) -> List[MemoryEntry]: ...
+
+    @abstractmethod
+    def save_embedding(self, entry_id: str, vec: List[float]) -> None: ...
+
+    @abstractmethod
+    def get_embedding(self, entry_id: str) -> Optional[List[float]]: ...
+
+    @abstractmethod
+    def stats(self) -> Dict[str, Any]: ...
+
+    def close(self) -> None:
+        """可选：关闭后端（文件句柄、连接等）。"""
+        pass
+
+
+class InMemoryBackend(BaseMemoryBackend):
+    """内存后端 - 适合测试与轻量场景。"""
+
+    def __init__(self) -> None:
+        self._entries: Dict[str, MemoryEntry] = {}
+        self._embeddings: Dict[str, List[float]] = {}
+
+    def upsert(self, entry: MemoryEntry) -> None:
+        self._entries[entry.id] = entry
+
+    def get(self, entry_id: str) -> Optional[MemoryEntry]:
+        return self._entries.get(entry_id)
+
+    def delete(self, entry_id: str) -> bool:
+        existed = entry_id in self._entries
+        self._entries.pop(entry_id, None)
+        self._embeddings.pop(entry_id, None)
+        return existed
+
+    def all(self) -> List[MemoryEntry]:
+        return list(self._entries.values())
+
+    def save_embedding(self, entry_id: str, vec: List[float]) -> None:
+        self._embeddings[entry_id] = list(vec)
+
+    def get_embedding(self, entry_id: str) -> Optional[List[float]]:
+        vec = self._embeddings.get(entry_id)
+        return list(vec) if vec is not None else None
+
+    def stats(self) -> Dict[str, Any]:
+        return {
+            "backend": "memory",
+            "entries": len(self._entries),
+            "embeddings": len(self._embeddings),
+        }
+
+
+class JsonlBackend(BaseMemoryBackend):
+    """JSONL 文件后端 - 追加式、人类可读。
+
+    文件结构：
+        {filepath}.jsonl     - 每行一条 entry 的 JSON（不含 embedding）
+        {filepath}.emb.jsonl - 每行 {id, dim, vec: [...]} 的 JSON
+    """
+
+    def __init__(self, filepath: str = "memory/memories.jsonl") -> None:
+        self.filepath = Path(filepath)
+        if self.filepath.parent and str(self.filepath.parent) not in ("", "."):
+            self.filepath.parent.mkdir(parents=True, exist_ok=True)
+        self.emb_filepath = self.filepath.with_suffix(".emb.jsonl")
+        self._lock = threading.Lock()
+        self._cache: Dict[str, MemoryEntry] = {}
+        self._emb_cache: Dict[str, List[float]] = {}
+        self._loaded = False
+        self._load()
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        with self._lock:
+            if self.filepath.exists():
+                with open(self.filepath, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                            entry = MemoryEntry.from_dict(data)
+                            self._cache[entry.id] = entry
+                        except Exception as e:
+                            logger.warning(f"JsonlBackend: 无法解析行: {e}")
+            if self.emb_filepath.exists():
+                with open(self.emb_filepath, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                            self._emb_cache[data["id"]] = list(data.get("vec", []))
+                        except Exception as e:
+                            logger.warning(f"JsonlBackend: 无法解析 embedding 行: {e}")
+            self._loaded = True
+
+    def upsert(self, entry: MemoryEntry) -> None:
+        with self._lock:
+            self._cache[entry.id] = entry
+            # 追加到文件
+            with open(self.filepath, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
+
+    def get(self, entry_id: str) -> Optional[MemoryEntry]:
+        entry = self._cache.get(entry_id)
+        if entry is None:
+            return None
+        # 把 embedding 单独取回
+        emb = self._emb_cache.get(entry_id)
+        if emb is not None:
+            entry.embedding = emb
+        return entry
+
+    def delete(self, entry_id: str) -> bool:
+        with self._lock:
+            existed = entry_id in self._cache
+            self._cache.pop(entry_id, None)
+            self._emb_cache.pop(entry_id, None)
+            if existed:
+                # 重写主文件（去掉该行）
+                if self.filepath.exists():
+                    tmp = self.filepath.with_suffix(".tmp")
+                    with open(self.filepath, "r", encoding="utf-8") as f, open(tmp, "w", encoding="utf-8") as out:
+                        for line in f:
+                            try:
+                                data = json.loads(line)
+                                if data.get("id") != entry_id:
+                                    out.write(line)
+                            except Exception:
+                                out.write(line)
+                    os.replace(tmp, self.filepath)
+                # 重写 embedding 文件
+                if self.emb_filepath.exists():
+                    tmp = self.emb_filepath.with_suffix(".tmp")
+                    with open(self.emb_filepath, "r", encoding="utf-8") as f, open(tmp, "w", encoding="utf-8") as out:
+                        for line in f:
+                            try:
+                                data = json.loads(line)
+                                if data.get("id") != entry_id:
+                                    out.write(line)
+                            except Exception:
+                                out.write(line)
+                    os.replace(tmp, self.emb_filepath)
+            return existed
+
+    def all(self) -> List[MemoryEntry]:
+        return list(self._cache.values())
+
+    def save_embedding(self, entry_id: str, vec: List[float]) -> None:
+        with self._lock:
+            self._emb_cache[entry_id] = list(vec)
+            with open(self.emb_filepath, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"id": entry_id, "vec": list(vec)}, ensure_ascii=False) + "\n")
+
+    def get_embedding(self, entry_id: str) -> Optional[List[float]]:
+        vec = self._emb_cache.get(entry_id)
+        return list(vec) if vec is not None else None
+
+    def stats(self) -> Dict[str, Any]:
+        return {
+            "backend": "jsonl",
+            "filepath": str(self.filepath),
+            "entries": len(self._cache),
+            "embeddings": len(self._emb_cache),
+        }
+
+
+class SqliteBackend(BaseMemoryBackend):
+    """SQLite 后端 - 跨进程安全，WAL 日志模式。
+
+    表结构：
+        memories(id PK, type, content, tags CSV, importance REAL,
+                 source_session, source_agent, created_at, updated_at,
+                 access_count INTEGER, last_accessed_at)
+        memory_embeddings(memory_id PK, vec BLOB)
+    """
+
+    def __init__(self, db_path: str = "memory/memories.db") -> None:
+        import sqlite3
+
+        if os.path.dirname(db_path):
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+        self.db_path = db_path
+        self._lock = threading.Lock()
+        self._closed = False
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS memories (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '',
+                importance REAL NOT NULL DEFAULT 0.5,
+                source_session TEXT NOT NULL DEFAULT '',
+                source_agent TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                access_count INTEGER NOT NULL DEFAULT 0,
+                last_accessed_at TEXT
+            )"""
+        )
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS memory_embeddings (
+                memory_id TEXT PRIMARY KEY,
+                vec BLOB NOT NULL,
+                FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
+            )"""
+        )
+        self._conn.commit()
+
+    def _check_open(self) -> None:
+        if self._closed:
+            raise RuntimeError(f"SqliteBackend 已关闭: {self.db_path}")
+
+    def upsert(self, entry: MemoryEntry) -> None:
+        tags_csv = ",".join(entry.tags)
+        with self._lock:
+            self._check_open()
+            self._conn.execute(
+                """INSERT OR REPLACE INTO memories
+                   (id, type, content, tags, importance, source_session, source_agent,
+                    created_at, updated_at, access_count, last_accessed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    entry.id,
+                    entry.type.value if hasattr(entry.type, "value") else str(entry.type),
+                    entry.content,
+                    tags_csv,
+                    float(entry.importance),
+                    entry.source_session,
+                    entry.source_agent,
+                    entry.created_at,
+                    entry.updated_at,
+                    int(entry.access_count),
+                    entry.last_accessed_at,
+                ),
+            )
+            self._conn.commit()
+
+    def get(self, entry_id: str) -> Optional[MemoryEntry]:
+        with self._lock:
+            self._check_open()
+            row = self._conn.execute(
+                """SELECT id, type, content, tags, importance, source_session,
+                          source_agent, created_at, updated_at, access_count,
+                          last_accessed_at
+                   FROM memories WHERE id = ?""",
+                (entry_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        data = {
+            "id": row[0],
+            "type": row[1],
+            "content": row[2],
+            "tags": row[3],
+            "importance": row[4],
+            "source_session": row[5],
+            "source_agent": row[6],
+            "created_at": row[7],
+            "updated_at": row[8],
+            "access_count": row[9],
+            "last_accessed_at": row[10],
+        }
+        entry = MemoryEntry.from_dict(data)
+        # embedding 单独取
+        emb = self.get_embedding(entry_id)
+        if emb is not None:
+            entry.embedding = emb
+        return entry
+
+    def delete(self, entry_id: str) -> bool:
+        with self._lock:
+            self._check_open()
+            cur = self._conn.execute("DELETE FROM memories WHERE id = ?", (entry_id,))
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def all(self) -> List[MemoryEntry]:
+        with self._lock:
+            self._check_open()
+            rows = self._conn.execute(
+                """SELECT id, type, content, tags, importance, source_session,
+                          source_agent, created_at, updated_at, access_count,
+                          last_accessed_at FROM memories"""
+            ).fetchall()
+        entries = []
+        for row in rows:
+            data = {
+                "id": row[0],
+                "type": row[1],
+                "content": row[2],
+                "tags": row[3],
+                "importance": row[4],
+                "source_session": row[5],
+                "source_agent": row[6],
+                "created_at": row[7],
+                "updated_at": row[8],
+                "access_count": row[9],
+                "last_accessed_at": row[10],
+            }
+            entries.append(MemoryEntry.from_dict(data))
+        return entries
+
+    def save_embedding(self, entry_id: str, vec: List[float]) -> None:
+        blob = _pack_vector(vec)
+        with self._lock:
+            self._check_open()
+            self._conn.execute(
+                """INSERT OR REPLACE INTO memory_embeddings (memory_id, vec) VALUES (?, ?)""",
+                (entry_id, blob),
+            )
+            self._conn.commit()
+
+    def get_embedding(self, entry_id: str) -> Optional[List[float]]:
+        with self._lock:
+            self._check_open()
+            row = self._conn.execute(
+                "SELECT vec FROM memory_embeddings WHERE memory_id = ?",
+                (entry_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _unpack_vector(row[0])
+
+    def stats(self) -> Dict[str, Any]:
+        with self._lock:
+            self._check_open()
+            count = self._conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+            emb_count = self._conn.execute("SELECT COUNT(*) FROM memory_embeddings").fetchone()[0]
+        return {
+            "backend": "sqlite",
+            "db_path": self.db_path,
+            "entries": count,
+            "embeddings": emb_count,
+        }
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._conn.close()
+
+
+class MemoryStore:
+    """记忆存储上层接口 - 业务侧只用它。
+
+    对外暴露：
+    - upsert/get/delete/iter_all/stats
+    - 与后端解耦
+    """
+
+    def __init__(self, backend: BaseMemoryBackend) -> None:
+        self.backend = backend
+
+    def upsert(self, entry: MemoryEntry) -> None:
+        self.backend.upsert(entry)
+
+    def get(self, entry_id: str) -> Optional[MemoryEntry]:
+        return self.backend.get(entry_id)
+
+    def delete(self, entry_id: str) -> bool:
+        return self.backend.delete(entry_id)
+
+    def iter_all(self) -> Iterable[MemoryEntry]:
+        return iter(self.backend.all())
+
+    def stats(self) -> Dict[str, Any]:
+        return self.backend.stats()
+
+    def close(self) -> None:
+        self.backend.close()

@@ -15,6 +15,7 @@ Workflow / Scheduler / Transaction 负责执行编排。
 - **上下文工程**：历史管理、Token 预算、压缩、GSSC 流水线
 - **可观测**：TraceLogger 双格式（JSONL+HTML）审计、事件系统、流式输出
 - **Skills 知识外化**：渐进式披露（元数据 + 按需 body），节省 Token
+- **跨会话持久记忆**：长期/短期/工作之外的"跨任务记忆"，混合检索（关键词+向量）
 - **企业级运维**：结构化日志、Prometheus 指标、分布式追踪、限流、配置热更新、健康检查、监控端点
 
 ## 安装
@@ -65,6 +66,7 @@ agentorchestra/
 ├── context/          # 上下文工程（历史/Token 计数/GSSC/截断）
 ├── observability/    # 可观测性（TraceLogger）
 ├── skills/           # Skills 知识外化（SkillLoader/Skill）
+├── memory/           # 跨会话持久记忆（Manager/混合检索/Summarizer/工具）
 └── ontology/         # 企业级 Ontology（语义/动能/存储/治理/流程/工具生成）
 ```
 
@@ -77,6 +79,7 @@ agentorchestra/
 | tools | [docs/tools/README.md](docs/tools/README.md) |
 | context | [docs/context/README.md](docs/context/README.md) |
 | observability | [docs/observability/README.md](docs/observability/README.md) |
+| memory | [docs/memory/README.md](docs/memory/README.md) |
 | ontology | [docs/ontology/README.md](docs/ontology/README.md) |
 
 ## 开发
