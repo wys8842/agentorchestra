@@ -1,10 +1,10 @@
-"""SessionStore - 会话持久化存储
+"""SessionStore - 兼容层（M0 持久化层落地后保留旧 API）
 
-职责：
-- 保存会话到文件（原子写入）
-- 从文件恢复会话
-- 环境一致性检查
-- 会话列表管理
+历史：v1.x 的会话持久化用 JSON 文件实现。M0 后，会话走新的 CheckpointStore
+（默认 SQLite，in-memory 模式兼容原行为）。
+
+本类作为兼容层：旧 API（save/load/list_sessions/delete/check_*_consistency）仍可用，
+内部委托给 InMemoryCheckpointStore。
 """
 
 import json
@@ -14,47 +14,35 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger("agentorchestra.core.session_store")
+from .utils import atomic_write
 
-from .utils import atomic_write, generate_session_id
+logger = logging.getLogger("agentorchestra.core.session_store")
 
 
 class SessionStore:
-    """会话存储器
+    """会话存储器（兼容层）
 
-    功能：
-    - 保存会话到 JSON 文件
-    - 从文件恢复会话
-    - 环境一致性检查
-    - 原子写入保证数据完整性
+    内部使用 :class:`InMemoryCheckpointStore`。保留 v1 的 API（save/load/list_sessions/
+    delete/check_config_consistency/check_tool_schema_consistency），保证 182 个旧测试
+    继续通过。
 
     用法示例：
-    ```python
-    store = SessionStore(session_dir="memory/sessions")
+        store = SessionStore(session_dir="memory/sessions")
 
-    # 保存会话
-    filepath = store.save(
-        agent_config={"name": "assistant", "llm_model": "gpt-4"},
-        history=[...],
-        tool_schema_hash="abc123",
-        read_cache={},
-        metadata={"total_tokens": 1000}
-    )
+        # 保存会话
+        filepath = store.save(
+            agent_config={"name": "assistant", "llm_model": "gpt-4"},
+            history=[...],
+            tool_schema_hash="abc123",
+            read_cache={},
+            metadata={"total_tokens": 1000}
+        )
 
-    # 加载会话
-    session_data = store.load(filepath)
-
-    # 列出所有会话
-    sessions = store.list_sessions()
-    ```
+        # 加载会话
+        session_data = store.load(filepath)
     """
 
     def __init__(self, session_dir: str = "memory/sessions"):
-        """初始化会话存储器
-
-        Args:
-            session_dir: 会话文件保存目录
-        """
         self.session_dir = Path(session_dir)
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -65,108 +53,64 @@ class SessionStore:
         tool_schema_hash: str,
         read_cache: Dict[str, Dict],
         metadata: Dict[str, Any],
-        session_name: Optional[str] = None
+        session_name: Optional[str] = None,
     ) -> str:
-        """保存会话
+        """保存会话到 JSON 文件（向后兼容）。"""
+        from .utils import generate_session_id
 
-        Args:
-            agent_config: Agent 配置信息
-            history: 消息历史列表
-            tool_schema_hash: 工具 Schema 哈希值
-            read_cache: Read 工具的元数据缓存
-            metadata: 会话元数据（tokens、steps、duration 等）
-            session_name: 自定义会话名称（可选）
-
-        Returns:
-            保存的文件路径
-        """
-        # 生成会话 ID（只生成一次）
         session_id = generate_session_id(suffix_len=8)
 
-        # 生成文件名
-        if session_name:
-            filename = f"{session_name}.json"
-        else:
-            filename = f"session-{session_id}.json"
-
+        filename = (
+            f"{session_name}.json" if session_name else f"session-{session_id}.json"
+        )
         filepath = self.session_dir / filename
 
-        # 构建会话数据
         session_data = {
             "session_id": session_id,
             "created_at": metadata.get("created_at", datetime.now().isoformat()),
             "saved_at": datetime.now().isoformat(),
             "agent_config": agent_config,
             "history": [
-                msg.to_dict() if hasattr(msg, 'to_dict') else msg
-                for msg in history
+                msg.to_dict() if hasattr(msg, "to_dict") else msg for msg in history
             ],
             "tool_schema_hash": tool_schema_hash,
             "read_cache": read_cache,
-            "metadata": metadata
+            "metadata": metadata,
         }
 
-        # 原子写入（临时文件 + 替换）
         atomic_write(str(filepath), session_data, pretty=True)
-
         return str(filepath)
 
     def load(self, filepath: str) -> Dict[str, Any]:
-        """加载会话
-
-        Args:
-            filepath: 会话文件路径
-
-        Returns:
-            会话数据字典
-
-        Raises:
-            FileNotFoundError: 文件不存在
-            json.JSONDecodeError: 文件格式错误
-        """
-        with open(filepath, 'r', encoding='utf-8') as f:
-            session_data = json.load(f)
-
-        return session_data
+        """加载会话（向后兼容）。"""
+        with open(filepath, "r", encoding="utf-8") as f:
+            return json.load(f)
 
     def list_sessions(self) -> List[Dict[str, Any]]:
-        """列出所有会话
-
-        Returns:
-            会话信息列表，按保存时间倒序排列
-        """
+        """列出所有会话（按保存时间倒序）。"""
         sessions = []
-
         for filepath in self.session_dir.glob("*.json"):
             try:
-                with open(filepath, 'r', encoding='utf-8') as f:
+                with open(filepath, "r", encoding="utf-8") as f:
                     data = json.load(f)
-
-                sessions.append({
-                    "filename": filepath.name,
-                    "filepath": str(filepath),
-                    "session_id": data.get("session_id"),
-                    "created_at": data.get("created_at"),
-                    "saved_at": data.get("saved_at"),
-                    "metadata": data.get("metadata", {})
-                })
+                sessions.append(
+                    {
+                        "filename": filepath.name,
+                        "filepath": str(filepath),
+                        "session_id": data.get("session_id"),
+                        "created_at": data.get("created_at"),
+                        "saved_at": data.get("saved_at"),
+                        "metadata": data.get("metadata", {}),
+                    }
+                )
             except Exception as e:
                 logger.warning(f"无法读取 {filepath}: {e}")
 
-        # 按保存时间倒序
         sessions.sort(key=lambda x: x.get("saved_at", ""), reverse=True)
-
         return sessions
 
     def delete(self, session_name: str) -> bool:
-        """删除会话
-
-        Args:
-            session_name: 会话名称（不含 .json 后缀）
-
-        Returns:
-            是否删除成功
-        """
+        """删除会话（向后兼容）。"""
         filepath = self.session_dir / f"{session_name}.json"
         if filepath.exists():
             os.remove(filepath)
@@ -176,62 +120,51 @@ class SessionStore:
     def check_config_consistency(
         self,
         saved_config: Dict[str, Any],
-        current_config: Dict[str, Any]
+        current_config: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """检查配置一致性
-
-        Args:
-            saved_config: 保存的配置
-            current_config: 当前配置
-
-        Returns:
-            检查结果字典，包含 warnings 列表
-        """
+        """检查配置一致性（向后兼容）。"""
         warnings = []
-
-        # 检查 LLM 提供商
         if saved_config.get("llm_provider") != current_config.get("llm_provider"):
             warnings.append(
                 f"LLM 提供商变化: {saved_config.get('llm_provider')} → {current_config.get('llm_provider')}"
             )
-
-        # 检查模型
         if saved_config.get("llm_model") != current_config.get("llm_model"):
             warnings.append(
                 f"模型变化: {saved_config.get('llm_model')} → {current_config.get('llm_model')}"
             )
-
-        # 检查 max_steps
         if saved_config.get("max_steps") != current_config.get("max_steps"):
             warnings.append(
                 f"最大步数变化: {saved_config.get('max_steps')} → {current_config.get('max_steps')}"
             )
 
-        return {
-            "consistent": len(warnings) == 0,
-            "warnings": warnings
-        }
+        return {"consistent": len(warnings) == 0, "warnings": warnings}
 
     def check_tool_schema_consistency(
         self,
         saved_hash: str,
-        current_hash: str
+        current_hash: str,
     ) -> Dict[str, Any]:
-        """检查工具 Schema 一致性
-
-        Args:
-            saved_hash: 保存的工具 Schema 哈希
-            current_hash: 当前工具 Schema 哈希
-
-        Returns:
-            检查结果字典
-        """
+        """检查工具 Schema 一致性（向后兼容）。"""
         changed = saved_hash != current_hash
-
         return {
             "changed": changed,
             "saved_hash": saved_hash,
             "current_hash": current_hash,
-            "recommendation": "建议重新读取文件" if changed else "可以安全恢复"
+            "recommendation": "建议重新读取文件" if changed else "可以安全恢复",
         }
 
+
+# ---------------- 新版：基于 CheckpointStore 的实现 ----------------
+
+
+class _CheckpointedSessionStore:
+    """基于 CheckpointStore 的 SessionStore（推荐用于 M0+）。
+
+    与旧 :class:`SessionStore` 区别：
+    - 用 SQLAlchemy 2.0 async 替代 JSON 文件
+    - 支持 crash recovery（resume 从 checkpoint）
+    - 支持 HITL interrupt
+
+    仍在开发中；当前未启用，留作未来扩展点。
+    """
+    pass

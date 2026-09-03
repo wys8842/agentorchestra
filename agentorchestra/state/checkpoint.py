@@ -1,0 +1,182 @@
+"""Checkpoint - durable checkpoint 抽象与存储接口。
+
+设计见 docs/superpowers/specs/2026-09-03-m0-persistence-design.md §5.1
+"""
+
+from __future__ import annotations
+
+import json
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from .interrupt import Interrupt
+    from .snapshot import Snapshot
+    from .wal import WALEntry
+
+
+@dataclass
+class Checkpoint:
+    """一个 checkpoint。
+
+    Attributes:
+        thread_id: 所属 thread
+        checkpoint_id: 全局唯一 id（默认用 uuid4）
+        parent_id: 父 checkpoint id（链式）
+        state: 序列化状态（通常是 {"history": [...], "step": int}）
+        metadata: 任意元数据（如 token_count / tools_used）
+        created_at: 创建时间
+    """
+
+    thread_id: str
+    checkpoint_id: str
+    state: Dict[str, Any]
+    parent_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.now)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "thread_id": self.thread_id,
+            "checkpoint_id": self.checkpoint_id,
+            "parent_id": self.parent_id,
+            "state": self.state,
+            "metadata": self.metadata,
+            "created_at": self.created_at.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Checkpoint":
+        return cls(
+            thread_id=d["thread_id"],
+            checkpoint_id=d["checkpoint_id"],
+            state=d["state"],
+            parent_id=d.get("parent_id"),
+            metadata=d.get("metadata", {}),
+            created_at=datetime.fromisoformat(d["created_at"])
+            if isinstance(d.get("created_at"), str)
+            else d.get("created_at", datetime.now()),
+        )
+
+
+class CheckpointStore(ABC):
+    """Checkpoint 存储抽象。
+
+    所有方法都是 async（基于 SQLAlchemy 2.0 async）。InMemory 实现保持 async 签名
+    以保证调用方代码统一。
+    """
+
+    @abstractmethod
+    async def init(self) -> None:
+        """初始化存储（创建表/索引）。"""
+
+    @abstractmethod
+    async def close(self) -> None:
+        """关闭连接。"""
+
+    # ---------------- Thread ----------------
+
+    @abstractmethod
+    async def create_thread(
+        self, thread_id: str, metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """创建/初始化一个 thread。已存在则忽略。"""
+
+    @abstractmethod
+    async def get_thread(self, thread_id: str) -> Optional[Dict[str, Any]]:
+        """获取 thread 记录；不存在返回 None。"""
+
+    @abstractmethod
+    async def update_thread_status(self, thread_id: str, status: str) -> None:
+        """更新 thread 状态。"""
+
+    # ---------------- Checkpoint ----------------
+
+    @abstractmethod
+    async def save_checkpoint(self, cp: Checkpoint) -> None:
+        """保存 checkpoint（已存在则覆盖）。"""
+
+    @abstractmethod
+    async def load_checkpoint(
+        self, thread_id: str, checkpoint_id: str
+    ) -> Optional[Checkpoint]:
+        """加载指定 checkpoint。"""
+
+    @abstractmethod
+    async def list_checkpoints(
+        self, thread_id: str, limit: int = 50
+    ) -> List[Checkpoint]:
+        """按时间倒序列出 checkpoints。"""
+
+    @abstractmethod
+    async def latest_checkpoint(self, thread_id: str) -> Optional[Checkpoint]:
+        """获取 thread 最新 checkpoint。"""
+
+    # ---------------- WAL ----------------
+
+    @abstractmethod
+    async def append_wal(self, entry: "WALEntry") -> int:
+        """追加 WAL 条目，返回 sequence_no。"""
+
+    @abstractmethod
+    async def read_wal(
+        self, thread_id: str, after_seq: int = 0, limit: int = 1000
+    ) -> List["WALEntry"]:
+        """从指定 sequence_no 之后读取 WAL 条目。"""
+
+    @abstractmethod
+    async def max_wal_seq(self, thread_id: str) -> int:
+        """获取 thread 当前最大 sequence_no；无 WAL 则返回 0。"""
+
+    # ---------------- Snapshot ----------------
+
+    @abstractmethod
+    async def save_snapshot(self, snap: "Snapshot") -> None:
+        """保存快照。"""
+
+    @abstractmethod
+    async def latest_snapshot(self, thread_id: str) -> Optional["Snapshot"]:
+        """获取最新快照。"""
+
+    # ---------------- Interrupt ----------------
+
+    @abstractmethod
+    async def create_interrupt(self, intr: "Interrupt") -> None:
+        """创建中断。"""
+
+    @abstractmethod
+    async def resolve_interrupt(self, token: str, response: Dict[str, Any]) -> None:
+        """标记中断已解决（resume 触发）。"""
+
+    @abstractmethod
+    async def get_interrupt(self, token: str) -> Optional["Interrupt"]:
+        """获取中断。"""
+
+    # ---------------- 便捷 ----------------
+
+    async def count_checkpoints(self, thread_id: str) -> int:
+        """统计 thread 的 checkpoint 数量（默认实现可被子类覆盖优化）。"""
+        return len(await self.list_checkpoints(thread_id, limit=10_000_000))
+
+
+def json_default(obj: Any) -> Any:
+    """JSON 序列化兜底（datetime/Decimal/Set 等）。"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    raise TypeError(f"无法序列化 {type(obj).__name__}")
+
+
+def dumps_json(obj: Any) -> str:
+    return json.dumps(obj, ensure_ascii=False, default=json_default)
+
+
+def loads_json(s: str) -> Any:
+    if not s:
+        return None
+    return json.loads(s)

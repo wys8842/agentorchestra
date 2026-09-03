@@ -75,6 +75,14 @@ class Config(BaseModel):
     auto_save_enabled: bool = False  # 是否启用自动保存
     auto_save_interval: int = 10  # 自动保存间隔（每N条消息）
 
+    # M0 (P0) - durable checkpoint 持久化（roadmap §2）
+    persistence_mode: str = "sqlite"  # sqlite / postgres / in_memory
+    state_db_url: str = ""  # SQLAlchemy URL；空则按 persistence_mode 自动选
+    state_checkpoint_enabled: bool = True  # Agent.run() 每步保存 checkpoint
+    wal_snapshot_threshold: int = 1000  # 快照触发：WAL 条目数
+    wal_snapshot_interval_seconds: float = 60.0  # 快照触发：时间间隔
+    wal_snapshot_enabled: bool = False  # 后台快照 worker 默认关闭（避免无 loop 时报错）
+
     # 子代理机制配置
     subagent_enabled: bool = True  # 是否启用子代理机制
     subagent_max_steps: int = 15  # 子代理默认最大步数

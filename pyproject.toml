@@ -25,6 +25,9 @@ dependencies = [
     "pydantic>=2.0",
     "openai>=1.0",
     "tiktoken>=0.5",
+    # M0 (P0): persistent checkpoint + WAL (roadmap §2.2)
+    "sqlalchemy>=2.0",
+    "aiosqlite>=0.19",
 ]
 
 [project.optional-dependencies]
@@ -33,12 +36,17 @@ gemini = ["google-generativeai>=0.3"]
 mcp = ["mcp>=1.0"]
 neo4j = ["neo4j>=5.0"]
 yaml = ["pyyaml>=6.0"]
+postgres = ["asyncpg>=0.28"]
+otel = ["opentelemetry-api>=1.20", "opentelemetry-sdk>=1.20"]
 all = [
     "anthropic>=0.30",
     "google-generativeai>=0.3",
     "mcp>=1.0",
     "neo4j>=5.0",
     "pyyaml>=6.0",
+    "asyncpg>=0.28",
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
 ]
 dev = [
     "pytest>=7.0",

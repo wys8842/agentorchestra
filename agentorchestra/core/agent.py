@@ -6,13 +6,14 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 from .config import Config
-from .logging import get_logger
 from .lifecycle import AgentEvent, EventType, LifecycleHook
 from .llm import SymphonyLLM
+from .logging import get_logger
 from .message import Message
 from .utils import duration_seconds, generate_session_id, truncate_text
 
 if TYPE_CHECKING:
+    from ..state.checkpoint import CheckpointStore
     from ..tools.registry import ToolRegistry
     from ..tools.tool_filter import BaseToolFilter
 
@@ -202,7 +203,7 @@ class Agent(ABC):
 
         # 新增：跨会话持久记忆系统（v1）
         from agentorchestra.memory import MemoryManager
-        from agentorchestra.memory.tools import MemorySaveTool, MemoryRecallTool
+        from agentorchestra.memory.tools import MemoryRecallTool, MemorySaveTool
 
         self.memory_manager: Optional[MemoryManager] = None
         self._memory_inject_prefix: str = ""
@@ -240,6 +241,79 @@ class Agent(ABC):
         # 新增：DevLog 开发日志组件
         if self.config.devlog_enabled and self.tool_registry:
             self._register_devlog_tool()
+
+        # 新增（M0 / P0）：durable checkpoint 接入
+        self.checkpoint_store: Optional[CheckpointStore] = None
+        self._active_thread_id: Optional[str] = None
+        self._pending_resume_response: Optional[Dict[str, Any]] = None
+        self._wal_flush_target: Optional[Any] = None  # ontology object_store
+        self._thread_manager: Optional[Any] = None
+        self._snapshot_worker: Optional[Any] = None
+        if self.config.state_checkpoint_enabled:
+            try:
+                self._init_checkpoint_store()
+            except Exception as e:
+                if self.config.debug:
+                    self.logger.warning(f"Checkpoint store 未启用（{e}）")
+                self.checkpoint_store = None
+
+    def _init_checkpoint_store(self) -> None:
+        """初始化 CheckpointStore（M0）。
+
+        - 默认 SQLite 本机零配置（persistence_mode='sqlite'）
+        - 可切 'in_memory'（兼容层）/ 'postgres'
+        - 把 ontology_engine.object_store 的 WAL 桥接到 CheckpointStore
+        """
+        from ..state import get_default_store
+        from ..state.snapshot import SnapshotPolicy, SnapshotWorker
+        from ..state.thread import ThreadManager
+
+        mode = (self.config.persistence_mode or "sqlite").lower()
+        url = (self.config.state_db_url or "").strip()
+
+        if mode == "in_memory":
+            store = get_default_store("in_memory://")
+        elif mode == "postgres":
+            if not url:
+                raise ValueError("persistence_mode='postgres' 需要 state_db_url")
+            store = get_default_store(url)
+        else:  # sqlite（默认）
+            if url:
+                store = get_default_store(url)
+            else:
+                store = get_default_store()  # 默认零配置 SQLite 文件
+
+        self.checkpoint_store = store
+        self._thread_manager = ThreadManager(store=store)
+
+        # 把 ontology object_store 的 WAL 桥接到 CheckpointStore
+        if self.ontology_engine is not None:
+            obj_store = getattr(self.ontology_engine, "object_store", None)
+            if obj_store is not None:
+                # 在每步 checkpoint 时 flush 积压的 WAL 条目
+                self._wire_ontology_wal(obj_store)
+
+        # 后台快照 worker（可选）
+        if self.config.wal_snapshot_enabled:
+            self._snapshot_worker = SnapshotWorker(
+                store=store,
+                policy=SnapshotPolicy(
+                    wal_threshold=self.config.wal_snapshot_threshold,
+                    interval_seconds=self.config.wal_snapshot_interval_seconds,
+                    enabled=True,
+                ),
+                thread_ids_provider=lambda: [self._active_thread_id]
+                if self._active_thread_id
+                else [],
+            )
+        else:
+            self._snapshot_worker = None
+
+    def _wire_ontology_wal(self, obj_store: Any) -> None:
+        """把 ObjectStore 同步 WAL queue 桥接到 CheckpointStore（async）。"""
+        self._wal_flush_target = obj_store
+        # 设置 thread_id 为空（运行时由 Agent 设置）
+        obj_store.set_wal_thread_id(None)
 
     @property
     def system_prompt(self) -> str:
@@ -1521,3 +1595,151 @@ class Agent(ABC):
         )
 
         return light_llm
+
+    # ==================== M0 / P0 - Durable Checkpoint ====================
+
+    async def _save_checkpoint(self, thread_id: str, state: Dict[str, Any],
+                                step: Optional[int] = None,
+                                metadata: Optional[Dict[str, Any]] = None) -> str:
+        """保存当前状态到 checkpoint + WAL。
+
+        Args:
+            thread_id: thread id（Agent.run 入口创建或复用）
+            state: 序列化状态（如 {"history": [...], "step": int}）
+            step: 步骤序号
+            metadata: 任意元数据
+
+        Returns:
+            checkpoint_id
+        """
+        if self.checkpoint_store is None:
+            return ""
+        import uuid as _uuid
+
+        from ..state.checkpoint import Checkpoint
+
+        # 确保 thread 存在
+        thread = await self.checkpoint_store.get_thread(thread_id)
+        if not thread:
+            await self.checkpoint_store.create_thread(thread_id)
+
+        # 找 parent_id
+        latest = await self.checkpoint_store.latest_checkpoint(thread_id)
+        parent_id = latest.checkpoint_id if latest else None
+
+        cp = Checkpoint(
+            thread_id=thread_id,
+            checkpoint_id=f"cp-{step or 0}-{_uuid.uuid4().hex[:8]}",
+            parent_id=parent_id,
+            state=state,
+            metadata={**(metadata or {}), "step": step} if step else (metadata or {}),
+        )
+        await self.checkpoint_store.save_checkpoint(cp)
+
+        # 同步写 WAL
+        from ..state.wal import WALActionType, WALEntry
+        await self.checkpoint_store.append_wal(WALEntry(
+            thread_id=thread_id,
+            action_type=WALActionType.CHECKPOINT,
+            payload={
+                "checkpoint_id": cp.checkpoint_id,
+                "parent_id": parent_id,
+                "step": step,
+            },
+        ))
+
+        # flush ontology WAL queue（collect-and-flush）
+        if self._wal_flush_target is not None:
+            try:
+                entries = self._wal_flush_target.drain_wal()
+                for e in entries:
+                    await self.checkpoint_store.append_wal(WALEntry(
+                        thread_id=e["thread_id"],
+                        action_type=e["action_type"],
+                        payload=e["payload"],
+                    ))
+            except Exception as ex:
+                if self.config.debug:
+                    self.logger.debug(f"ontology WAL flush failed: {ex}")
+
+        return cp.checkpoint_id
+
+    async def resume(self, thread_id: str, checkpoint_id: Optional[str] = None) -> Dict[str, Any]:
+        """从指定 checkpoint 恢复状态。
+
+        Args:
+            thread_id: thread id
+            checkpoint_id: 指定 checkpoint（默认最新）
+
+        Returns:
+            恢复的 state 字典（不含执行；调用方需自行注入到 Agent.run）
+        """
+        if self.checkpoint_store is None:
+            raise RuntimeError("Checkpoint store 未启用")
+
+        cp = None
+        if checkpoint_id:
+            cp = await self.checkpoint_store.load_checkpoint(thread_id, checkpoint_id)
+        if cp is None:
+            cp = await self.checkpoint_store.latest_checkpoint(thread_id)
+        if cp is None:
+            raise FileNotFoundError(f"thread {thread_id} 没有 checkpoint")
+
+        self._active_thread_id = thread_id
+        # 设置 ontology WAL context
+        if self.ontology_engine is not None:
+            obj_store = getattr(self.ontology_engine, "object_store", None)
+            if obj_store is not None:
+                obj_store.set_wal_thread_id(thread_id)
+
+        return dict(cp.state)
+
+    def interrupt(self, reason: str, payload: Optional[Dict[str, Any]] = None) -> None:
+        """发起 HITL 中断。
+
+        业务侧捕获 InterruptPending 后调 agent.resume_with(token, response)。
+        """
+        import asyncio
+        import uuid as _uuid
+
+        from ..state.interrupt import Interrupt, InterruptPending
+
+        if self.checkpoint_store is None:
+            raise RuntimeError("Checkpoint store 未启用")
+
+        thread_id = self._active_thread_id or "default"
+        token = f"int-{_uuid.uuid4().hex}"
+        checkpoint_id = ""  # 调用方应在前一帧 _save_checkpoint
+
+        intr = Interrupt(
+            token=token,
+            thread_id=thread_id,
+            checkpoint_id=checkpoint_id,
+            reason=reason,
+            payload=payload or {},
+        )
+
+        # 同步写库
+        loop = asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else None
+        if loop is not None and not loop.is_closed():
+            loop.create_task(self.checkpoint_store.create_interrupt(intr))
+        else:
+            # 测试或同步上下文：直接 asyncio.run
+            try:
+                asyncio.run(self.checkpoint_store.create_interrupt(intr))
+            except RuntimeError:
+                pass
+
+        raise InterruptPending(token=token, reason=reason, payload=payload or {})
+
+    async def resume_with(self, token: str, response: Dict[str, Any]) -> None:
+        """恢复被 interrupt 暂停的 Agent。
+
+        Args:
+            token: interrupt 时返回的 token
+            response: 业务侧响应（如 {"approved": True}）
+        """
+        if self.checkpoint_store is None:
+            raise RuntimeError("Checkpoint store 未启用")
+        await self.checkpoint_store.resolve_interrupt(token, response)
+        self._pending_resume_response = response

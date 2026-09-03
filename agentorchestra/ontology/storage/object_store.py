@@ -19,18 +19,51 @@ class ObjectStore:
 
     def __init__(self, graph: Optional[GraphStore] = None,
                  backend: Optional[BaseStorageBackend] = None,
-                 materializer: Optional[Any] = None):
+                 materializer: Optional[Any] = None,
+                 wal_hook: Optional[Any] = None):
         """初始化对象存储
 
         Args:
             graph: 图存储（关系/路径查询）
             backend: 存储后端（默认内存；传 SQLiteBackend 实现持久化）
             materializer: 物化管理器（可选，写操作后触发物化回写）
+            wal_hook: WAL hook（可选，M0+），签名 wal_hook(thread_id, action_type, payload)
+                所有 insert/update/delete 操作会调用 hook。失败不阻断主流程。
         """
         self.index = ObjectIndex(backend=backend or MemoryBackend())
         self.graph = graph or GraphStore()
         self.materializer = materializer
+        self.wal_hook = wal_hook  # type: ignore[assignment]
         self._types: Dict[str, ObjectType] = {}
+        # 当前 thread 上下文（WAL emit 用）。Agent 在每步 checkpoint 前设置
+        self._wal_thread_id: Optional[str] = None
+        # 同步 WAL queue（collect-and-flush 模式，Agent 周期调 drain_wal）
+        import threading as _threading
+        self._wal_lock = _threading.Lock()
+        self._wal_queue: List[Dict[str, Any]] = []
+
+    def set_wal_thread_id(self, thread_id: Optional[str]) -> None:
+        """设置当前 thread 上下文（M0 WAL 标签用）。
+
+        Agent 在每步保存 checkpoint 前调用，所有后续写操作的 WAL entry 都带该 thread_id。
+        设为 None 时关闭 WAL emit。
+        """
+        self._wal_thread_id = thread_id
+
+    def drain_wal(self) -> List[Dict[str, Any]]:
+        """取出并清空当前积压的 WAL 条目（同步）。
+
+        Agent 在保存 checkpoint 前调用，把积压的条目批量写给 CheckpointStore。
+        """
+        with self._wal_lock:
+            entries = self._wal_queue
+            self._wal_queue = []
+            return entries
+
+    def pending_wal_count(self) -> int:
+        """查看当前积压 WAL 条目数（不取出）。"""
+        with self._wal_lock:
+            return len(self._wal_queue)
 
     @property
     def backend_type(self) -> str:
@@ -63,6 +96,31 @@ class ObjectStore:
         except Exception:
             pass
 
+    def _wal_emit(self, action_type: str,
+                  payload: Dict[str, Any]) -> None:
+        """触发 WAL hook（M0+ 持久化）。
+
+        Args:
+            action_type: 'state_update' / 'link_create' / 'link_delete'
+            payload: 任意 JSON 可序列化数据
+        """
+        if self._wal_thread_id is None:
+            return
+        # collect-and-flush：把 entry 推到内部 queue，由 Agent 在 checkpoint 时统一刷入 CheckpointStore
+        entry = {
+            "thread_id": self._wal_thread_id,
+            "action_type": action_type,
+            "payload": payload,
+        }
+        with self._wal_lock:
+            self._wal_queue.append(entry)
+        # 兼容老式 hook（如果外部传入）：仍然调用
+        if self.wal_hook is not None:
+            try:
+                self.wal_hook(self._wal_thread_id, action_type, payload)
+            except Exception:
+                pass
+
     # ==================== 对象写入 ====================
 
     def insert(self, type_name: str, obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -90,6 +148,14 @@ class ObjectStore:
         # 同步图节点（显式 name，避免与业务字段 name 冲突）
         self.graph.merge_node(
             obj_type.api_name, dict(obj), name=f"{type_name}:{pk}")
+
+        # WAL emit（M0+）
+        self._wal_emit("state_update", {
+            "op": "insert",
+            "type": type_name,
+            "pk": pk,
+            "obj": dict(obj),
+        })
 
         # 物化回写（可选）
         self._materialize("insert", type_name, dict(obj))
@@ -127,6 +193,16 @@ class ObjectStore:
         self.graph.merge_node(
             obj_type.api_name, dict(merged), name=f"{type_name}:{pk}")
 
+        # WAL emit（M0+）
+        self._wal_emit("state_update", {
+            "op": "update",
+            "type": type_name,
+            "pk": pk,
+            "patch": dict(patch),
+            "before": current,
+            "after": merged,
+        })
+
         # 物化回写（可选）
         self._materialize("update", type_name, dict(merged), patch=dict(patch))
         return merged
@@ -138,6 +214,13 @@ class ObjectStore:
             # 清理图节点（使用公共接口）
             self.graph.remove_node(f"{type_name}:{pk}")
             self.graph.remove_node(pk)
+            # WAL emit（M0+）
+            self._wal_emit("state_update", {
+                "op": "delete",
+                "type": type_name,
+                "pk": pk,
+                "removed": removed,
+            })
             # 物化回写（可选）
             self._materialize("delete", type_name, {"pk": pk}, patch=dict(removed))
         return removed is not None
