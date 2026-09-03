@@ -118,6 +118,14 @@ class Config(BaseModel):
     memory_dedup_threshold: float = 0.92  # 写入去重相似度阈值
     memory_max_entries: int = 10000  # 容量上限（v1 仅记录统计）
 
+    # 多命名空间（v1.1）
+    memory_namespace: str = "default"  # Agent 默认 namespace
+
+    # 衰减机制（v1.1，默认关闭）
+    memory_decay_enabled: bool = False
+    memory_decay_tau_min_days: float = 7.0  # importance=0 的半衰期
+    memory_decay_tau_max_days: float = 180.0  # importance=1 的半衰期
+
     @classmethod
     def from_env(cls, env_prefix: str = "") -> "Config":
         """从环境变量创建配置

@@ -61,6 +61,7 @@ class MemoryEntry:
     embedding: Optional[List[float]] = None
     source_session: str = ""
     source_agent: str = ""
+    namespace: str = "default"  # v1.1: 命名空间，默认 "default"（向后兼容）
     created_at: str = field(default_factory=now_iso)
     updated_at: str = field(default_factory=now_iso)
     access_count: int = 0
@@ -90,6 +91,7 @@ class MemoryEntry:
             "importance": float(self.importance),
             "source_session": self.source_session,
             "source_agent": self.source_agent,
+            "namespace": self.namespace,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "access_count": int(self.access_count),
@@ -126,6 +128,7 @@ class MemoryEntry:
             embedding=embedding,
             source_session=data.get("source_session", "") or "",
             source_agent=data.get("source_agent", "") or "",
+            namespace=data.get("namespace", "") or "default",
             created_at=data.get("created_at") or now_iso(),
             updated_at=data.get("updated_at") or now_iso(),
             access_count=int(data.get("access_count", 0) or 0),

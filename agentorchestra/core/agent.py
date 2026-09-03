@@ -206,9 +206,15 @@ class Agent(ABC):
 
         self.memory_manager: Optional[MemoryManager] = None
         self._memory_inject_prefix: str = ""
+        # v1.1: 默认 namespace（config.memory_namespace，默认 "default"）
+        self.memory_namespace: str = getattr(self.config, "memory_namespace", "default") or "default"
         if self.config.memory_enabled:
             try:
-                self.memory_manager = MemoryManager.from_config(self.config, llm=self.llm)
+                self.memory_manager = MemoryManager.from_config(
+                    self.config,
+                    llm=self.llm,
+                    default_namespace=self.memory_namespace,
+                )
             except Exception as e:
                 self.logger.warning(f"记忆系统未启用（{e}）")
             else:
@@ -320,6 +326,7 @@ class Agent(ABC):
                 recalled = self.memory_manager.recall(
                     input_text,
                     top_k=self.config.memory_recall_top_k,
+                    namespace=self.memory_namespace,
                 )
                 if recalled:
                     self._memory_inject_prefix = self._format_memory_prefix(recalled)

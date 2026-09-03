@@ -43,6 +43,11 @@ memory_recall_top_k: int = 5
 memory_embedding_enabled: bool = True      # 关闭则纯关键词
 memory_dedup_threshold: float = 0.92
 memory_max_entries: int = 10000
+
+memory_namespace: str = "default"          # 默认命名空间（v1.1）
+memory_decay_enabled: bool = False         # 衰减机制（v1.1，默认关闭）
+memory_decay_tau_min_days: float = 7.0     # importance=0 的半衰期
+memory_decay_tau_max_days: float = 180.0   # importance=1 的半衰期
 ```
 
 ## 快速开始
@@ -82,8 +87,10 @@ agent.run("我之前偏好过什么语言？")
 
 工具入参：
 
-- `MemorySaveTool(content, type=fact|preference|episode|procedure, tags="a,b", importance=0.5)`
-- `MemoryRecallTool(query, type?, top_k=5)`
+- `MemorySaveTool(content, type=fact|preference|episode|procedure, tags="a,b", importance=0.5, namespace="default")`
+- `MemoryRecallTool(query, type?, top_k=5, namespace="default")`
+
+`namespace` 默认由 Agent 的 `memory_namespace` 决定；显式传 `namespace` 可写入/检索指定命名空间。
 
 ## 检索机制
 
@@ -94,6 +101,48 @@ agent.run("我之前偏好过什么语言？")
 3. **融合**：α × kw_norm + (1−α) × cos_norm，α 默认 0.3
 
 **降级链**：`SymphonyLLM` embedding 不可用 → 自动切关键词检索，不报错。
+
+## 多命名空间（v1.1）
+
+每条 `MemoryEntry` 带 `namespace: str`（默认 `"default"`）。所有 API 都接受 namespace 参数做**严格隔离**：
+
+- `remember(..., namespace=...)` / `recall(..., namespace=...)` / `list(..., namespace=...)`
+- Agent 默认 namespace = `config.memory_namespace`（默认 `"default"`），写入/回忆都在该 namespace 内
+- 去重也只在**同 namespace** 内做（不同 namespace 的同内容不算重复）
+
+```python
+cfg = Config(memory_enabled=True, memory_namespace="user:alice")
+agent = ReActAgent(name="Assistant", llm=llm, config=cfg, tool_registry=registry)
+
+# Agent 的 MemorySave/Recall 工具默认作用在 user:alice
+# 跨 namespace 完全不互通
+```
+
+多用户 / 多 Agent / 多项目可用 `memory_namespace` 天然隔离（如 `"user:alice"` / `"agent:coder"` / `"project:x"`）。
+
+> SQLite 老库启动时自动 `ALTER TABLE` 迁移添加 `namespace` 列（老数据归 `"default"`），无需手工操作。
+
+## 衰减机制（v1.1，默认关闭）
+
+模拟 Ebbinghaus 遗忘曲线：老记忆随 `updated_at` 距今越久，召回分数越低；`importance` 越高衰减越慢。
+
+```python
+cfg = Config(memory_enabled=True, memory_decay_enabled=True,
+             memory_decay_tau_min_days=7.0, memory_decay_tau_max_days=180.0)
+```
+
+公式：
+
+```
+Δt_days = (now - updated_at) / 86400
+τ_days  = lerp(τ_min, τ_max, importance)     # 0→τ_min, 1→τ_max
+decay   = 2 ^ (-Δt_days / τ_days)
+score   = fused_score × decay × importance
+```
+
+- **重要性越高半衰期越长**：importance=0.3 约 59 天半衰，importance=0.9 约 163 天
+- **recall 命中会强化**：命中后 `updated_at` 重置为 now，衰减计时重新开始
+- 关闭时（默认）打分与 v1 完全一致，向后兼容
 
 ## 跨会话工作流
 
@@ -158,28 +207,30 @@ agent.run("我之前偏好过什么语言？")
 
 - 不重建程序记忆（用 `skills/`）
 - 不重建工作/短期记忆（用 `HistoryManager`）
-- v1 单记忆空间（`source_session` 仅元数据，不参与隔离）；多用户/多 Agent 命名空间隔离留待后续
+- v1.1 支持多命名空间（`MemoryEntry.namespace`，Agent 通过 `config.memory_namespace` 指定）
+- v1.1 衰减机制默认关闭（`memory_decay_enabled=False`）；开启后行为与 v1 不同（旧记忆排序降低）
 
 ## API 速览
 
 ```python
 from agentorchestra.memory import MemoryManager, MemoryEntry, MemoryType
 
-mgr = MemoryManager.from_config(cfg, llm=llm)
+mgr = MemoryManager.from_config(cfg, llm=llm, default_namespace="user:alice")
 
-# 写入
+# 写入（默认 namespace=user:alice）
 eid = mgr.remember(content="...", type=MemoryType.FACT, tags=["..."])
 mgr.remember_batch([{"content": "...", "type": "fact", "importance": 0.6}, ...])
 
-# 检索
+# 检索（限定 namespace）
 hits: list[MemoryEntry] = mgr.recall(query, top_k=5, types=[MemoryType.FACT])
+hits_other = mgr.recall(query, top_k=5, namespace="agent:coder")
 
 # 列出
-items = mgr.list(types=[MemoryType.PREFERENCE], limit=20)
+items = mgr.list(types=[MemoryType.PREFERENCE], limit=20, namespace="user:alice")
 
 # 删除
 mgr.forget(entry_id)
 
-# 统计
+# 统计（含 default_namespace / decay_enabled）
 mgr.stats()
 ```

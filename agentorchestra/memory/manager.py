@@ -45,20 +45,32 @@ class MemoryManager:
         keyword_index: KeywordIndex,
         retriever: HybridRetriever,
         dedup_threshold: float = 0.92,
+        default_namespace: str = "default",
+        decay_enabled: bool = False,
+        tau_min_days: float = 7.0,
+        tau_max_days: float = 180.0,
     ) -> None:
         self.store = store
         self.embedder = embedder
         self.keyword_index = keyword_index
         self.retriever = retriever
         self.dedup_threshold = dedup_threshold
+        self.default_namespace = default_namespace or "default"
+        self.decay_enabled = bool(decay_enabled)
+        self.tau_min_days = float(tau_min_days)
+        self.tau_max_days = float(tau_max_days)
 
     @classmethod
     def from_config(
         cls,
         config: Any,
         llm: Optional[Any] = None,
+        default_namespace: Optional[str] = None,
     ) -> "MemoryManager":
         """从 Config 与（可选）LLM 实例构造。
+
+        Args:
+            default_namespace: 覆盖 config.memory_namespace 的显式 namespace
 
         Raises:
             FileNotFoundError / PermissionError: 目录不可写
@@ -90,12 +102,21 @@ class MemoryManager:
         keyword_index.build(store.iter_all())
         retriever = HybridRetriever(store, keyword_index, embedder=embedder)
         dedup = float(getattr(config, "memory_dedup_threshold", 0.92))
+
+        ns = default_namespace or getattr(config, "memory_namespace", "default") or "default"
+        decay_enabled = bool(getattr(config, "memory_decay_enabled", False))
+        tau_min = float(getattr(config, "memory_decay_tau_min_days", 7.0))
+        tau_max = float(getattr(config, "memory_decay_tau_max_days", 180.0))
         return cls(
             store=store,
             embedder=embedder,
             keyword_index=keyword_index,
             retriever=retriever,
             dedup_threshold=dedup,
+            default_namespace=ns,
+            decay_enabled=decay_enabled,
+            tau_min_days=tau_min,
+            tau_max_days=tau_max,
         )
 
     # ==================== 写入 ====================
@@ -108,6 +129,7 @@ class MemoryManager:
         importance: float = 0.5,
         source_session: str = "",
         source_agent: str = "",
+        namespace: Optional[str] = None,
     ) -> str:
         """写入一条记忆（含去重）。
 
@@ -117,6 +139,7 @@ class MemoryManager:
             tags: 标签列表
             importance: 重要性 0~1
             source_session / source_agent: 元数据
+            namespace: 命名空间（None → 使用 default_namespace）
 
         Returns:
             条目 ID（新写入或已更新）
@@ -124,6 +147,7 @@ class MemoryManager:
         if not content or not content.strip():
             raise ValueError("content 不能为空")
 
+        ns = namespace or self.default_namespace
         entry = MemoryEntry(
             type=type,
             content=content.strip(),
@@ -131,9 +155,10 @@ class MemoryManager:
             importance=float(importance),
             source_session=source_session,
             source_agent=source_agent,
+            namespace=ns,
         )
 
-        # 去重（仅在 embedding 可用时启用）
+        # 去重（仅在 embedding 可用时启用；同 namespace 内）
         existing_id = self._find_similar_existing(entry)
         if existing_id is not None:
             old = self.store.get(existing_id)
@@ -181,7 +206,7 @@ class MemoryManager:
         return ids
 
     def _find_similar_existing(self, candidate: MemoryEntry) -> Optional[str]:
-        """若新条目与已有条目相似度 ≥ 阈值，返回已有 id；否则 None。"""
+        """若新条目与已有条目（同 namespace + 同 type）相似度 ≥ 阈值，返回已有 id。"""
         if not (self.embedder.available):
             return None
         try:
@@ -195,7 +220,8 @@ class MemoryManager:
             return None
         best_id: Optional[str] = None
         best_score = 0.0
-        for existing in self.store.iter_all():
+        # 去重仅在同 namespace 内做
+        for existing in self.store.iter_all(namespace=candidate.namespace or "default"):
             if existing.type != candidate.type:
                 continue
             ev = existing.embedding
@@ -232,21 +258,40 @@ class MemoryManager:
         query: str,
         top_k: int = 5,
         types: Optional[List[MemoryType]] = None,
+        namespace: Optional[str] = None,
     ) -> List[MemoryEntry]:
-        """按 query 召回相关记忆条目。"""
-        return self.retriever.recall(query, top_k=top_k, types=types)
+        """按 query 在 namespace 内召回。
+
+        Args:
+            query: 查询文本
+            top_k: 返回数量
+            types: 类型过滤
+            namespace: 命名空间（None → 使用 default_namespace）
+        """
+        ns = namespace or self.default_namespace
+        return self.retriever.recall(
+            query,
+            top_k=top_k,
+            types=types,
+            namespace=ns,
+            decay_enabled=self.decay_enabled,
+            tau_min_days=self.tau_min_days,
+            tau_max_days=self.tau_max_days,
+        )
 
     def list(
         self,
         types: Optional[List[MemoryType]] = None,
         limit: int = 50,
+        namespace: Optional[str] = None,
     ) -> List[MemoryEntry]:
-        """列出记忆条目（按 updated_at 倒序）。"""
+        """列出记忆条目（按 updated_at 倒序，限定 namespace）。"""
         types_set = None
         if types:
             types_set = {t.value if isinstance(t, MemoryType) else str(t) for t in types}
+        ns = namespace or self.default_namespace
         items: List[MemoryEntry] = []
-        for entry in self.store.iter_all():
+        for entry in self.store.iter_all(namespace=ns):
             if types_set is not None:
                 t_val = entry.type.value if isinstance(entry.type, MemoryType) else str(entry.type)
                 if t_val not in types_set:
@@ -268,6 +313,8 @@ class MemoryManager:
             "store": self.store.stats(),
             "dedup_threshold": self.dedup_threshold,
             "embedder_available": self.embedder.available,
+            "default_namespace": self.default_namespace,
+            "decay_enabled": self.decay_enabled,
         }
 
     def close(self) -> None:

@@ -47,7 +47,7 @@ class BaseMemoryBackend(ABC):
     def delete(self, entry_id: str) -> bool: ...
 
     @abstractmethod
-    def all(self) -> List[MemoryEntry]: ...
+    def all(self, namespace: str = "default") -> List[MemoryEntry]: ...
 
     @abstractmethod
     def save_embedding(self, entry_id: str, vec: List[float]) -> None: ...
@@ -82,8 +82,8 @@ class InMemoryBackend(BaseMemoryBackend):
         self._embeddings.pop(entry_id, None)
         return existed
 
-    def all(self) -> List[MemoryEntry]:
-        return list(self._entries.values())
+    def all(self, namespace: str = "default") -> List[MemoryEntry]:
+        return [e for e in self._entries.values() if (e.namespace or "default") == namespace]
 
     def save_embedding(self, entry_id: str, vec: List[float]) -> None:
         self._embeddings[entry_id] = list(vec)
@@ -197,8 +197,8 @@ class JsonlBackend(BaseMemoryBackend):
                     os.replace(tmp, self.emb_filepath)
             return existed
 
-    def all(self) -> List[MemoryEntry]:
-        return list(self._cache.values())
+    def all(self, namespace: str = "default") -> List[MemoryEntry]:
+        return [e for e in self._cache.values() if (e.namespace or "default") == namespace]
 
     def save_embedding(self, entry_id: str, vec: List[float]) -> None:
         with self._lock:
@@ -249,12 +249,16 @@ class SqliteBackend(BaseMemoryBackend):
                 importance REAL NOT NULL DEFAULT 0.5,
                 source_session TEXT NOT NULL DEFAULT '',
                 source_agent TEXT NOT NULL DEFAULT '',
+                namespace TEXT NOT NULL DEFAULT 'default',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 access_count INTEGER NOT NULL DEFAULT 0,
                 last_accessed_at TEXT
             )"""
         )
+        # v1.1 迁移：先补齐老库 namespace 列，再建索引（顺序很关键）
+        self._migrate_namespace_column()
+
         self._conn.execute(
             """CREATE TABLE IF NOT EXISTS memory_embeddings (
                 memory_id TEXT PRIMARY KEY,
@@ -262,7 +266,29 @@ class SqliteBackend(BaseMemoryBackend):
                 FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
             )"""
         )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace)"
+        )
         self._conn.commit()
+
+    def _migrate_namespace_column(self) -> None:
+        """若 memories 表缺 namespace 列，则 ALTER TABLE 添加（v1 兼容）。"""
+        try:
+            cols = [
+                row[1] for row in self._conn.execute("PRAGMA table_info(memories)").fetchall()
+            ]
+            if "namespace" not in cols:
+                with self._lock:
+                    self._conn.execute(
+                        "ALTER TABLE memories ADD COLUMN namespace TEXT NOT NULL DEFAULT 'default'"
+                    )
+                    self._conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace)"
+                    )
+                    self._conn.commit()
+                    logger.info("SqliteBackend: 已迁移 schema，添加 namespace 列")
+        except Exception as e:
+            logger.warning(f"SqliteBackend: namespace 列迁移失败（{e}），继续运行")
 
     def _check_open(self) -> None:
         if self._closed:
@@ -270,13 +296,14 @@ class SqliteBackend(BaseMemoryBackend):
 
     def upsert(self, entry: MemoryEntry) -> None:
         tags_csv = ",".join(entry.tags)
+        ns = entry.namespace or "default"
         with self._lock:
             self._check_open()
             self._conn.execute(
                 """INSERT OR REPLACE INTO memories
                    (id, type, content, tags, importance, source_session, source_agent,
-                    created_at, updated_at, access_count, last_accessed_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    namespace, created_at, updated_at, access_count, last_accessed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     entry.id,
                     entry.type.value if hasattr(entry.type, "value") else str(entry.type),
@@ -285,6 +312,7 @@ class SqliteBackend(BaseMemoryBackend):
                     float(entry.importance),
                     entry.source_session,
                     entry.source_agent,
+                    ns,
                     entry.created_at,
                     entry.updated_at,
                     int(entry.access_count),
@@ -298,7 +326,7 @@ class SqliteBackend(BaseMemoryBackend):
             self._check_open()
             row = self._conn.execute(
                 """SELECT id, type, content, tags, importance, source_session,
-                          source_agent, created_at, updated_at, access_count,
+                          source_agent, namespace, created_at, updated_at, access_count,
                           last_accessed_at
                    FROM memories WHERE id = ?""",
                 (entry_id,),
@@ -313,10 +341,11 @@ class SqliteBackend(BaseMemoryBackend):
             "importance": row[4],
             "source_session": row[5],
             "source_agent": row[6],
-            "created_at": row[7],
-            "updated_at": row[8],
-            "access_count": row[9],
-            "last_accessed_at": row[10],
+            "namespace": row[7] or "default",
+            "created_at": row[8],
+            "updated_at": row[9],
+            "access_count": row[10],
+            "last_accessed_at": row[11],
         }
         entry = MemoryEntry.from_dict(data)
         # embedding 单独取
@@ -332,13 +361,16 @@ class SqliteBackend(BaseMemoryBackend):
             self._conn.commit()
             return cur.rowcount > 0
 
-    def all(self) -> List[MemoryEntry]:
+    def all(self, namespace: str = "default") -> List[MemoryEntry]:
+        ns = namespace or "default"
         with self._lock:
             self._check_open()
             rows = self._conn.execute(
                 """SELECT id, type, content, tags, importance, source_session,
-                          source_agent, created_at, updated_at, access_count,
-                          last_accessed_at FROM memories"""
+                          source_agent, namespace, created_at, updated_at, access_count,
+                          last_accessed_at
+                   FROM memories WHERE namespace = ? ORDER BY updated_at DESC""",
+                (ns,),
             ).fetchall()
         entries = []
         for row in rows:
@@ -350,10 +382,11 @@ class SqliteBackend(BaseMemoryBackend):
                 "importance": row[4],
                 "source_session": row[5],
                 "source_agent": row[6],
-                "created_at": row[7],
-                "updated_at": row[8],
-                "access_count": row[9],
-                "last_accessed_at": row[10],
+                "namespace": row[7] or "default",
+                "created_at": row[8],
+                "updated_at": row[9],
+                "access_count": row[10],
+                "last_accessed_at": row[11],
             }
             entries.append(MemoryEntry.from_dict(data))
         return entries
@@ -419,8 +452,8 @@ class MemoryStore:
     def delete(self, entry_id: str) -> bool:
         return self.backend.delete(entry_id)
 
-    def iter_all(self) -> Iterable[MemoryEntry]:
-        return iter(self.backend.all())
+    def iter_all(self, namespace: str = "default") -> Iterable[MemoryEntry]:
+        return iter(self.backend.all(namespace=namespace))
 
     def stats(self) -> Dict[str, Any]:
         return self.backend.stats()

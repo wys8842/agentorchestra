@@ -57,6 +57,11 @@ class MemorySaveTool(Tool):
                 description="重要性 0~1，默认 0.5",
                 required=False, default="0.5",
             ),
+            ToolParameter(
+                name="namespace", type="string",
+                description="命名空间（默认 'default'），用于隔离不同用户/Agent 的记忆",
+                required=False, default="default",
+            ),
         ]
 
     def run(self, parameters: Dict[str, Any]) -> ToolResponse:
@@ -84,12 +89,15 @@ class MemorySaveTool(Tool):
             importance = 0.5
         importance = max(0.0, min(1.0, importance))
 
+        ns = str(parameters.get("namespace", "") or "") or "default"
+
         try:
             entry_id = self.manager.remember(
                 content=str(content).strip(),
                 type=type_enum,
                 tags=tags,
                 importance=importance,
+                namespace=ns,
             )
         except Exception as e:
             return ToolResponse.error(
@@ -98,10 +106,11 @@ class MemorySaveTool(Tool):
             )
 
         return ToolResponse.success(
-            text=f"记忆已保存（type={type_enum.value}）：id={entry_id[:8]}",
+            text=f"记忆已保存（type={type_enum.value}, namespace={ns}）：id={entry_id[:8]}",
             data={
                 "entry_id": entry_id,
                 "type": type_enum.value,
+                "namespace": ns,
                 "tags": tags,
                 "importance": importance,
             },
@@ -144,6 +153,11 @@ class MemoryRecallTool(Tool):
                 description="返回数量，默认 5",
                 required=False, default="5",
             ),
+            ToolParameter(
+                name="namespace", type="string",
+                description="命名空间（默认 'default'），用于隔离不同用户/Agent 的记忆",
+                required=False, default="default",
+            ),
         ]
 
     def run(self, parameters: Dict[str, Any]) -> ToolResponse:
@@ -171,11 +185,14 @@ class MemoryRecallTool(Tool):
             top_k = 5
         top_k = max(1, min(50, top_k))
 
+        ns = str(parameters.get("namespace", "") or "") or "default"
+
         try:
             entries: List[MemoryEntry] = self.manager.recall(
                 query=str(query).strip(),
                 top_k=top_k,
                 types=type_filter,
+                namespace=ns,
             )
         except Exception as e:
             return ToolResponse.error(
