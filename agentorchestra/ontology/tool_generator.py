@@ -47,6 +47,7 @@ class ObjectQueryTool(Tool):
         return name[0].upper() + name[1:] if name else ""
 
     def get_parameters(self) -> List[ToolParameter]:
+        """返回查询参数定义"""
         return [
             ToolParameter(name="mode", type="string", description="查询模式: get/search/filter/list/aggregate/links", required=True),
             ToolParameter(name="pk", type="string", description="主键值（get/links 用）", required=False),
@@ -58,6 +59,7 @@ class ObjectQueryTool(Tool):
         ]
 
     def run(self, parameters: Dict[str, Any]) -> ToolResponse:
+        """按 mode 分发执行对象查询"""
         mode = parameters.get("mode", "list").lower()
         type_name = self.object_type.api_name
 
@@ -157,11 +159,13 @@ class ObjectActionTool(Tool):
         )
 
     def get_parameters(self) -> List[ToolParameter]:
+        """返回动作参数定义"""
         return [ToolParameter(name=p.name, type=p.type, description=p.description or p.name,
                               required=p.required, default=p.default)
                 for p in self.action.get_parameters()]
 
     def run(self, parameters: Dict[str, Any]) -> ToolResponse:
+        """执行动作并返回结果"""
         if self.security and self.security_ctx:
             if not self.security.check(self.action.api_name, "write", self.security_ctx):
                 self._audit("execute", parameters, success=False, reason="access_denied")
@@ -221,11 +225,13 @@ class FunctionCallTool(Tool):
         return "".join(p[0].upper() + p[1:] for p in name.split("_") if p)
 
     def get_parameters(self) -> List[ToolParameter]:
+        """返回函数参数定义"""
         return [ToolParameter(name=a.name, type=a.type, description=a.description or a.name,
                               required=a.required, default=a.default)
                 for a in self.function.get_arguments()]
 
     def run(self, parameters: Dict[str, Any]) -> ToolResponse:
+        """调用函数并返回结果"""
         try:
             result = self.function.call(parameters, {"object_store": self.store})
             return ToolResponse.success(
@@ -248,12 +254,15 @@ class ToolGenerator:
         self.query_engine = query_engine
 
     def object_query_tool(self, object_type: ObjectType) -> Tool:
+        """生成对象类型查询 Tool"""
         return ObjectQueryTool(object_type, self.store, self.security,
                                self.security_ctx, self.audit, self.query_engine)
 
     def action_tool(self, action: ActionType) -> Tool:
+        """生成动作执行 Tool"""
         return ObjectActionTool(action, self.store, self.security,
                                 self.security_ctx, self.audit)
 
     def function_tool(self, function: Function) -> Tool:
+        """生成函数调用 Tool"""
         return FunctionCallTool(function, self.store)

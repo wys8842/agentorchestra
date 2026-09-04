@@ -40,6 +40,7 @@ class Snapshot:
     created_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典（created_at 用 ISO8601 字符串）。"""
         return {
             "thread_id": self.thread_id,
             "snapshot_id": self.snapshot_id,

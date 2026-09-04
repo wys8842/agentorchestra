@@ -63,6 +63,7 @@ class UsageRecorder:
         return agg
 
     def snapshot(self) -> List[Dict[str, Any]]:
+        """返回全部记录副本（供导出/观测）。"""
         return [asdict(r) for r in self._records]
 
     # ---------------- 导出 ----------------

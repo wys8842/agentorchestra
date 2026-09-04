@@ -190,6 +190,7 @@ class ContextBuilder:
 
         # 2) 计算新近性（指数衰减）
         def recency_score(ts: datetime) -> float:
+            """按时间指数衰减计算新近性得分（1 小时时间尺度）"""
             delta = max((datetime.now() - ts).total_seconds(), 0)
             tau = 3600  # 1小时时间尺度，可暴露到配置
             return math.exp(-delta / tau)

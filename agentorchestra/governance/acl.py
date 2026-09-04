@@ -80,9 +80,11 @@ class ACLManager:
         return before - len(self._rules)
 
     def clear(self) -> None:
+        """清空全部规则。"""
         self._rules.clear()
 
     def list_rules(self) -> List[ACLRule]:
+        """返回全部规则副本。"""
         return list(self._rules)
 
     # ---------------- 决策 ----------------

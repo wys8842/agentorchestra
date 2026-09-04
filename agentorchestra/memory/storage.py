@@ -38,25 +38,39 @@ class BaseMemoryBackend(ABC):
     """存储后端抽象接口。"""
 
     @abstractmethod
-    def upsert(self, entry: MemoryEntry) -> None: ...
+    def upsert(self, entry: MemoryEntry) -> None:
+        """写入或更新一条记忆。"""
+        raise NotImplementedError
 
     @abstractmethod
-    def get(self, entry_id: str) -> Optional[MemoryEntry]: ...
+    def get(self, entry_id: str) -> Optional[MemoryEntry]:
+        """按 id 读取记忆，不存在时返回 None。"""
+        raise NotImplementedError
 
     @abstractmethod
-    def delete(self, entry_id: str) -> bool: ...
+    def delete(self, entry_id: str) -> bool:
+        """按 id 删除记忆，返回是否存在。"""
+        raise NotImplementedError
 
     @abstractmethod
-    def all(self, namespace: str = "default") -> List[MemoryEntry]: ...
+    def all(self, namespace: str = "default") -> List[MemoryEntry]:
+        """返回命名空间下的全部记忆。"""
+        raise NotImplementedError
 
     @abstractmethod
-    def save_embedding(self, entry_id: str, vec: List[float]) -> None: ...
+    def save_embedding(self, entry_id: str, vec: List[float]) -> None:
+        """保存记忆的向量。"""
+        raise NotImplementedError
 
     @abstractmethod
-    def get_embedding(self, entry_id: str) -> Optional[List[float]]: ...
+    def get_embedding(self, entry_id: str) -> Optional[List[float]]:
+        """读取记忆的向量，不存在时返回 None。"""
+        raise NotImplementedError
 
     @abstractmethod
-    def stats(self) -> Dict[str, Any]: ...
+    def stats(self) -> Dict[str, Any]:
+        """返回后端统计信息。"""
+        raise NotImplementedError
 
     def close(self) -> None:
         """可选：关闭后端（文件句柄、连接等）。"""
@@ -71,28 +85,35 @@ class InMemoryBackend(BaseMemoryBackend):
         self._embeddings: Dict[str, List[float]] = {}
 
     def upsert(self, entry: MemoryEntry) -> None:
+        """写入或更新一条记忆。"""
         self._entries[entry.id] = entry
 
     def get(self, entry_id: str) -> Optional[MemoryEntry]:
+        """按 id 读取记忆。"""
         return self._entries.get(entry_id)
 
     def delete(self, entry_id: str) -> bool:
+        """按 id 删除记忆，返回是否存在。"""
         existed = entry_id in self._entries
         self._entries.pop(entry_id, None)
         self._embeddings.pop(entry_id, None)
         return existed
 
     def all(self, namespace: str = "default") -> List[MemoryEntry]:
+        """返回命名空间下的全部记忆。"""
         return [e for e in self._entries.values() if (e.namespace or "default") == namespace]
 
     def save_embedding(self, entry_id: str, vec: List[float]) -> None:
+        """保存记忆的向量。"""
         self._embeddings[entry_id] = list(vec)
 
     def get_embedding(self, entry_id: str) -> Optional[List[float]]:
+        """读取记忆的向量。"""
         vec = self._embeddings.get(entry_id)
         return list(vec) if vec is not None else None
 
     def stats(self) -> Dict[str, Any]:
+        """返回后端统计信息。"""
         return {
             "backend": "memory",
             "entries": len(self._entries),
@@ -149,29 +170,29 @@ class JsonlBackend(BaseMemoryBackend):
             self._loaded = True
 
     def upsert(self, entry: MemoryEntry) -> None:
+        """写入或更新一条记忆（追加到 JSONL 文件）。"""
         with self._lock:
             self._cache[entry.id] = entry
-            # 追加到文件
             with open(self.filepath, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
 
     def get(self, entry_id: str) -> Optional[MemoryEntry]:
+        """按 id 读取记忆。"""
         entry = self._cache.get(entry_id)
         if entry is None:
             return None
-        # 把 embedding 单独取回
         emb = self._emb_cache.get(entry_id)
         if emb is not None:
             entry.embedding = emb
         return entry
 
     def delete(self, entry_id: str) -> bool:
+        """按 id 删除记忆（重写文件去掉该行），返回是否存在。"""
         with self._lock:
             existed = entry_id in self._cache
             self._cache.pop(entry_id, None)
             self._emb_cache.pop(entry_id, None)
             if existed:
-                # 重写主文件（去掉该行）
                 if self.filepath.exists():
                     tmp = self.filepath.with_suffix(".tmp")
                     with open(self.filepath, "r", encoding="utf-8") as f, open(tmp, "w", encoding="utf-8") as out:
@@ -183,7 +204,6 @@ class JsonlBackend(BaseMemoryBackend):
                             except Exception:
                                 out.write(line)
                     os.replace(tmp, self.filepath)
-                # 重写 embedding 文件
                 if self.emb_filepath.exists():
                     tmp = self.emb_filepath.with_suffix(".tmp")
                     with open(self.emb_filepath, "r", encoding="utf-8") as f, open(tmp, "w", encoding="utf-8") as out:
@@ -198,19 +218,23 @@ class JsonlBackend(BaseMemoryBackend):
             return existed
 
     def all(self, namespace: str = "default") -> List[MemoryEntry]:
+        """返回命名空间下的全部记忆。"""
         return [e for e in self._cache.values() if (e.namespace or "default") == namespace]
 
     def save_embedding(self, entry_id: str, vec: List[float]) -> None:
+        """保存记忆的向量（追加到 emb 文件）。"""
         with self._lock:
             self._emb_cache[entry_id] = list(vec)
             with open(self.emb_filepath, "a", encoding="utf-8") as f:
                 f.write(json.dumps({"id": entry_id, "vec": list(vec)}, ensure_ascii=False) + "\n")
 
     def get_embedding(self, entry_id: str) -> Optional[List[float]]:
+        """读取记忆的向量。"""
         vec = self._emb_cache.get(entry_id)
         return list(vec) if vec is not None else None
 
     def stats(self) -> Dict[str, Any]:
+        """返回后端统计信息。"""
         return {
             "backend": "jsonl",
             "filepath": str(self.filepath),
@@ -295,6 +319,7 @@ class SqliteBackend(BaseMemoryBackend):
             raise RuntimeError(f"SqliteBackend 已关闭: {self.db_path}")
 
     def upsert(self, entry: MemoryEntry) -> None:
+        """写入或更新一条记忆（INSERT OR REPLACE）。"""
         tags_csv = ",".join(entry.tags)
         ns = entry.namespace or "default"
         with self._lock:
@@ -322,6 +347,7 @@ class SqliteBackend(BaseMemoryBackend):
             self._conn.commit()
 
     def get(self, entry_id: str) -> Optional[MemoryEntry]:
+        """按 id 读取记忆（SQLite 查询）。"""
         with self._lock:
             self._check_open()
             row = self._conn.execute(
@@ -348,13 +374,13 @@ class SqliteBackend(BaseMemoryBackend):
             "last_accessed_at": row[11],
         }
         entry = MemoryEntry.from_dict(data)
-        # embedding 单独取
         emb = self.get_embedding(entry_id)
         if emb is not None:
             entry.embedding = emb
         return entry
 
     def delete(self, entry_id: str) -> bool:
+        """按 id 删除记忆（级联删向量），返回是否存在。"""
         with self._lock:
             self._check_open()
             cur = self._conn.execute("DELETE FROM memories WHERE id = ?", (entry_id,))
@@ -362,6 +388,7 @@ class SqliteBackend(BaseMemoryBackend):
             return cur.rowcount > 0
 
     def all(self, namespace: str = "default") -> List[MemoryEntry]:
+        """返回命名空间下的全部记忆（按更新时间倒序）。"""
         ns = namespace or "default"
         with self._lock:
             self._check_open()
@@ -392,6 +419,7 @@ class SqliteBackend(BaseMemoryBackend):
         return entries
 
     def save_embedding(self, entry_id: str, vec: List[float]) -> None:
+        """保存记忆的向量（二进制打包后写入）。"""
         blob = _pack_vector(vec)
         with self._lock:
             self._check_open()
@@ -402,6 +430,7 @@ class SqliteBackend(BaseMemoryBackend):
             self._conn.commit()
 
     def get_embedding(self, entry_id: str) -> Optional[List[float]]:
+        """读取记忆的向量。"""
         with self._lock:
             self._check_open()
             row = self._conn.execute(
@@ -413,6 +442,7 @@ class SqliteBackend(BaseMemoryBackend):
         return _unpack_vector(row[0])
 
     def stats(self) -> Dict[str, Any]:
+        """返回后端统计信息。"""
         with self._lock:
             self._check_open()
             count = self._conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
@@ -444,19 +474,25 @@ class MemoryStore:
         self.backend = backend
 
     def upsert(self, entry: MemoryEntry) -> None:
+        """写入或更新一条记忆。"""
         self.backend.upsert(entry)
 
     def get(self, entry_id: str) -> Optional[MemoryEntry]:
+        """按 id 读取记忆。"""
         return self.backend.get(entry_id)
 
     def delete(self, entry_id: str) -> bool:
+        """按 id 删除记忆，返回是否存在。"""
         return self.backend.delete(entry_id)
 
     def iter_all(self, namespace: str = "default") -> Iterable[MemoryEntry]:
+        """迭代命名空间下的全部记忆。"""
         return iter(self.backend.all(namespace=namespace))
 
     def stats(self) -> Dict[str, Any]:
+        """返回后端统计信息。"""
         return self.backend.stats()
 
     def close(self) -> None:
+        """关闭后端资源。"""
         self.backend.close()

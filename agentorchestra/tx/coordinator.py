@@ -100,9 +100,11 @@ class TransactionCoordinator:
         return action
 
     def get_action(self, name: str) -> Optional[TxAction]:
+        """按名取已注册动作，不存在返回 None。"""
         return self._actions.get(name)
 
     def list_actions(self) -> List[str]:
+        """列出已注册动作名。"""
         return list(self._actions.keys())
 
     # ---------------- WAL 辅助（供 TxContext 调用） ----------------

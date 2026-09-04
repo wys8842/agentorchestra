@@ -108,12 +108,14 @@ class KeywordIndex:
         self._doc_tokens: Dict[str, Counter] = {}
 
     def build(self, entries: Iterable[MemoryEntry]) -> None:
+        """清空并重建倒排索引（startup 全量初始化）。"""
         self._index.clear()
         self._doc_tokens.clear()
         for entry in entries:
             self.update(entry)
 
     def update(self, entry: MemoryEntry) -> None:
+        """增量更新单个 entry 的倒排记录（先删旧记录再写入）。"""
         doc_id = entry.id
         # 删除旧的 token 记录
         self.delete(doc_id)
@@ -131,6 +133,7 @@ class KeywordIndex:
         self._doc_tokens[doc_id] = counter
 
     def delete(self, doc_id: str) -> None:
+        """从倒排索引中移除 doc_id 的全部记录。"""
         counter = self._doc_tokens.pop(doc_id, None)
         if not counter:
             return
@@ -263,6 +266,7 @@ class HybridRetriever:
             cos_min = min(cos_vals) if cos_vals else 0.0
 
             def normalize(v: float, lo: float, hi: float) -> float:
+                """min-max 归一化到 [0,1]。"""
                 if hi == lo:
                     return 1.0 if v == hi else 0.0
                 return (v - lo) / (hi - lo)

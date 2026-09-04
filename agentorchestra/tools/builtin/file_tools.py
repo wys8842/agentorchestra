@@ -89,6 +89,7 @@ class ReadTool(Tool, FileToolMixin):
         self.registry = registry
 
     def get_parameters(self) -> List[ToolParameter]:
+        """实现 Tool 协议：返回文件读取参数定义（path/offset/limit）"""
         return [
             ToolParameter(
                 name="path",
@@ -312,6 +313,7 @@ class WriteTool(Tool, FileToolMixin):
         self.registry = registry
 
     def get_parameters(self) -> List[ToolParameter]:
+        """实现 Tool 协议：返回文件写入参数定义（path/content/file_mtime_ms）"""
         return [
             ToolParameter(
                 name="path",
@@ -437,6 +439,7 @@ class EditTool(Tool, FileToolMixin):
         self.registry = registry
 
     def get_parameters(self) -> List[ToolParameter]:
+        """实现 Tool 协议：返回文件编辑参数定义（path/old_string/new_string/file_mtime_ms）"""
         return [
             ToolParameter(
                 name="path",
@@ -588,6 +591,7 @@ class MultiEditTool(Tool, FileToolMixin):
         self.registry = registry
 
     def get_parameters(self) -> List[ToolParameter]:
+        """实现 Tool 协议：返回批量编辑参数定义（path/edits/file_mtime_ms）"""
         return [
             ToolParameter(
                 name="path",

@@ -261,6 +261,7 @@ class DevLogTool(Tool):
         self._load_if_exists()
 
     def get_parameters(self) -> List[ToolParameter]:
+        """实现 Tool 协议：返回日志操作参数定义（action/category/content/metadata/filter）"""
         return [
             ToolParameter(
                 name="action",

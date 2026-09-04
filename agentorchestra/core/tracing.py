@@ -94,6 +94,7 @@ class MemoryExporter(SpanExporter):
         self._lock = threading.Lock()
 
     def export(self, span: Span) -> None:
+        """导出单个 span 到内存列表（线程安全）"""
         with self._lock:
             self.spans.append(span.to_dict())
 
@@ -103,6 +104,7 @@ class MemoryExporter(SpanExporter):
             return list(self.spans)
 
     def clear(self) -> None:
+        """清空已导出的 span（线程安全）"""
         with self._lock:
             self.spans.clear()
 
@@ -118,6 +120,7 @@ class JsonlExporter(SpanExporter):
         self._lock = threading.Lock()
 
     def export(self, span: Span) -> None:
+        """追加导出单个 span 到 JSONL 文件（线程安全）"""
         with self._lock:
             with open(self.filepath, "a", encoding="utf-8") as f:
                 f.write(json.dumps(span.to_dict(), ensure_ascii=False) + "\n")
@@ -140,6 +143,7 @@ class JsonlExporter(SpanExporter):
             return spans
 
     def clear(self) -> None:
+        """删除 JSONL 文件以清空已导出的 span"""
         import os
         with self._lock:
             if os.path.exists(self.filepath):

@@ -65,6 +65,7 @@ class MetricsCollector:
 
     @property
     def is_available(self) -> bool:
+        """prometheus_client 是否可用"""
         return self._available
 
     # ==================== LLM 指标 ====================

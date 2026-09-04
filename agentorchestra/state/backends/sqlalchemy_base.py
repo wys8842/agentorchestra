@@ -37,6 +37,7 @@ from ..wal import WALActionType, WALEntry
 
 
 class Base(DeclarativeBase):
+    """SQLAlchemy ORM 元数据基类（所有 backend 表模型共享）。"""
     pass
 
 

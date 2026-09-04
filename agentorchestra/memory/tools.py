@@ -37,6 +37,7 @@ class MemorySaveTool(Tool):
         self.manager = manager
 
     def get_parameters(self) -> List[ToolParameter]:
+        """声明工具参数（content/type/tags/importance/namespace）。"""
         return [
             ToolParameter(
                 name="content", type="string",
@@ -65,6 +66,7 @@ class MemorySaveTool(Tool):
         ]
 
     def run(self, parameters: Dict[str, Any]) -> ToolResponse:
+        """执行记忆保存（校验参数后调用 manager.remember）。"""
         content = parameters.get("content")
         if not content or not str(content).strip():
             return ToolResponse.error(
@@ -138,6 +140,7 @@ class MemoryRecallTool(Tool):
         self.manager = manager
 
     def get_parameters(self) -> List[ToolParameter]:
+        """声明工具参数（query/type/top_k/namespace）。"""
         return [
             ToolParameter(
                 name="query", type="string",
@@ -161,6 +164,7 @@ class MemoryRecallTool(Tool):
         ]
 
     def run(self, parameters: Dict[str, Any]) -> ToolResponse:
+        """执行记忆检索（校验参数后调用 manager.recall）。"""
         query = parameters.get("query")
         if not query or not str(query).strip():
             return ToolResponse.error(

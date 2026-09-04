@@ -68,6 +68,7 @@ class MonitorServer:
 
     @property
     def is_running(self) -> bool:
+        """监控服务是否已启动"""
         return self._server is not None
 
     # ==================== 内部 ====================
@@ -76,7 +77,10 @@ class MonitorServer:
         server = self
 
         class Handler(BaseHTTPRequestHandler):
+            """HTTP 请求处理器：按路径分发 /metrics /health /traces"""
+
             def do_GET(self):
+                """处理 GET 请求，按路径返回指标/健康/追踪/服务信息"""
                 if self.path == "/metrics":
                     self._send_text(server._get_metrics())
                 elif self.path == "/health":
@@ -106,7 +110,8 @@ class MonitorServer:
                 self.wfile.write(body)
 
             def log_message(self, *args):
-                pass  # 静默访问日志
+                """静默访问日志，避免污染 stdout"""
+                pass
 
         return Handler
 

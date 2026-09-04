@@ -46,12 +46,14 @@ class _MetricFamily:
     # ---------------- counter / gauge ----------------
 
     def set_value(self, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+        """覆写样本值（gauge 用）。"""
         with self._lock:
             k = self._key(labels)
             self._labels_cache(k, labels)
             self._values[k] = float(value)
 
     def add(self, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+        """样本值累加（counter 用）。"""
         with self._lock:
             k = self._key(labels)
             self._labels_cache(k, labels)
@@ -69,6 +71,7 @@ class _MetricFamily:
         return k, (labels or {}), self._values[k]  # type: ignore[return-value]
 
     def observe(self, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+        """记录观测值到直方图桶（含 +Inf）。"""
         with self._lock:
             k, _lb, agg = self._ensure_histogram(labels)
             agg["count"] += 1
@@ -85,6 +88,7 @@ class _MetricFamily:
             self._labels[k] = dict(labels)
 
     def render(self) -> str:
+        """渲染该族为 Prometheus 文本（HELP/TYPE + 样本行）。"""
         lines = [f"# HELP {self.name} {self.help}",
                  f"# TYPE {self.name} {self.metric_type}"]
         with self._lock:
@@ -113,9 +117,11 @@ class Counter:
         self.family = _MetricFamily(name, documentation or name, "counter")
 
     def inc(self, amount: float = 1.0, labels: Optional[Dict[str, str]] = None) -> None:
+        """计数器累加。"""
         self.family.add(amount, labels)
 
     def get(self, labels: Optional[Dict[str, str]] = None) -> float:
+        """读取当前计数值（无样本返回 0.0）。"""
         k = str(sorted((labels or {}).items()))
         v = self.family._values.get(k)
         return float(v) if not isinstance(v, dict) and v is not None else 0.0
@@ -128,12 +134,15 @@ class Gauge:
         self.family = _MetricFamily(name, documentation or name, "gauge")
 
     def set(self, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+        """设置 gauge 值。"""
         self.family.set_value(value, labels)
 
     def inc(self, amount: float = 1.0, labels: Optional[Dict[str, str]] = None) -> None:
+        """gauge 增加。"""
         self.family.add(amount, labels)
 
     def dec(self, amount: float = 1.0, labels: Optional[Dict[str, str]] = None) -> None:
+        """gauge 减少。"""
         self.family.add(-amount, labels)
 
 
@@ -148,6 +157,7 @@ class Histogram:
         ]
 
     def observe(self, amount: float, labels: Optional[Dict[str, str]] = None) -> None:
+        """记录观测值到直方图。"""
         self.family.observe(amount, labels)
 
 

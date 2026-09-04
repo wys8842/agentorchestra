@@ -78,6 +78,7 @@ class GraphStore:
     # ==================== 查询 ====================
 
     def get_node(self, name: str) -> Optional[Dict[str, Any]]:
+        """按名称读取节点，不存在返回 None"""
         return self._nodes.get(name)
 
     def get_related(self, node_name: str, rel: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -133,14 +134,18 @@ class GraphStore:
         return results
 
     def list_nodes(self) -> List[str]:
+        """列出全部节点名"""
         return list(self._nodes.keys())
 
     def node_count(self) -> int:
+        """返回节点总数"""
         return len(self._nodes)
 
     def edge_count(self) -> int:
+        """返回边总数"""
         return sum(len(e) for e in self._edges.values())
 
     def clear(self) -> None:
+        """清空全部节点与边"""
         self._nodes.clear()
         self._edges.clear()

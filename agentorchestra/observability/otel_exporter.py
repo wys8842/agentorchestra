@@ -48,19 +48,23 @@ class OTLPHttpJsonExporter(SpanExporter):
     # ---------------- 生命周期 ----------------
 
     def enable(self) -> "OTLPHttpJsonExporter":
+        """开启发送（链式返回自身）。"""
         self.enabled = True
         return self
 
     def disable(self) -> "OTLPHttpJsonExporter":
+        """关闭发送（链式返回自身）。"""
         self.enabled = False
         return self
 
     @property
     def sent(self) -> int:
+        """成功发送次数。"""
         return self._sent
 
     @property
     def failed(self) -> int:
+        """发送失败次数。"""
         return self._failed
 
     # ---------------- 桥接 ----------------

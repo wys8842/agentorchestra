@@ -53,6 +53,7 @@ class WALEntry:
     created_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典。"""
         return {
             "thread_id": self.thread_id,
             "sequence_no": self.sequence_no,
@@ -66,6 +67,7 @@ class WALEntry:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "WALEntry":
+        """从字典反序列化（兼容字符串 action_type）。"""
         at = d.get("action_type", "checkpoint")
         if isinstance(at, str):
             at = WALActionType(at)

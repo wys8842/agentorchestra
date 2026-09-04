@@ -106,12 +106,14 @@ class Scheduler:
         return task
 
     def remove_task(self, name: str) -> bool:
+        """移除任务，返回是否移除成功"""
         if name in self._tasks:
             del self._tasks[name]
             return True
         return False
 
     def list_tasks(self) -> List[Dict[str, Any]]:
+        """列出全部任务的状态摘要"""
         return [{
             "name": t.name,
             "type": t.schedule_type,
@@ -139,6 +141,7 @@ class Scheduler:
             self._thread = None
 
     def is_running(self) -> bool:
+        """调度器是否在运行"""
         return self._running
 
     # ==================== 内部 ====================

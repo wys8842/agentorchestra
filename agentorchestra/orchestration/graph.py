@@ -46,6 +46,7 @@ class NodeContext:
     emit: Optional[Callable[[NodeEvent], None]] = None
 
     def node_iteration(self, name: str) -> int:
+        """读取指定节点已执行次数（默认 0）。"""
         return self.iteration.get(name, 0)
 
 
@@ -68,10 +69,12 @@ class NodeOutput:
     @classmethod
     def ok(cls, result: Any = None, route: Optional[str] = None,
            **data: Any) -> "NodeOutput":
+        """构造成功输出（kwargs 进入 data）。"""
         return cls(result=result, route=route, data=data)
 
     @classmethod
     def fail(cls, error: str) -> "NodeOutput":
+        """构造失败输出（仅含错误信息）。"""
         return cls(error=error)
 
 
@@ -110,6 +113,7 @@ class GraphResult:
     errors: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
+        """序列化为可传输字典（略去 events/messages）。"""
         return {
             "status": self.status,
             "graph_id": self.graph_id,
@@ -163,12 +167,15 @@ class Graph:
         return self
 
     def nodes(self) -> List[str]:
+        """返回全部节点名。"""
         return list(self._nodes.keys())
 
     def get_node(self, name: str) -> Optional[Node]:
+        """按名取节点，不存在返回 None。"""
         return self._nodes.get(name)
 
     def outgoing(self, name: str) -> List[Edge]:
+        """返回指定节点的全部出边。"""
         return list(self._edges.get(name, []))
 
     # ---------------- 拓扑校验 ----------------

@@ -21,14 +21,17 @@ class ObjectIndex:
 
     @property
     def backend_type(self) -> str:
+        """当前存储后端类型名"""
         return type(self.backend).__name__
 
     def close(self) -> None:
+        """关闭存储后端"""
         self.backend.close()
 
     # ==================== 维护 ====================
 
     def register_type(self, type_name: str) -> None:
+        """注册类型（后端 + 反向索引初始化）"""
         self.backend.register_type(type_name)
         self._inverted.setdefault(type_name, {})
 
@@ -43,6 +46,7 @@ class ObjectIndex:
             inv[prop][str(value)].add(pk)
 
     def update_object(self, type_name: str, pk: str, obj: Dict[str, Any]) -> None:
+        """更新对象（等价于重新索引全量对象）"""
         self.index_object(type_name, pk, obj)
 
     def remove_object(self, type_name: str, pk: str) -> Optional[Dict[str, Any]]:
@@ -61,9 +65,11 @@ class ObjectIndex:
     # ==================== 查询 ====================
 
     def get(self, type_name: str, pk: str) -> Optional[Dict[str, Any]]:
+        """按主键读取对象"""
         return self.backend.get(type_name, pk)
 
     def list(self, type_name: str) -> List[Dict[str, Any]]:
+        """列出类型下全部对象"""
         return self.backend.all(type_name)
 
     def search(self, type_name: str, query: str,
@@ -127,6 +133,7 @@ class ObjectIndex:
         return result
 
     def count(self, type_name: str) -> int:
+        """统计类型下对象数量"""
         return len(self.backend.all(type_name))
 
     def _compare(self, actual, expected, op: str) -> bool:

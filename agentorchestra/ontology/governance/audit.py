@@ -76,6 +76,7 @@ class AuditManager:
 
     def query(self, principal: Optional[str] = None, resource: Optional[str] = None,
               limit: int = 100) -> List[Dict[str, Any]]:
+        """按主体/资源过滤审计日志（最新在前）"""
         entries = self._log
         if principal:
             entries = [e for e in entries if e["principal"] == principal]
@@ -84,8 +85,9 @@ class AuditManager:
         return list(reversed(entries))[:limit]
 
     def count(self) -> int:
+        """返回审计记录条数"""
         return len(self._log)
 
     def clear(self) -> None:
-        # 只清内存；配 backend 后不删 DB 行（WORM）
+        """清空内存审计日志（配 WORM 后端时不删 DB 行）"""
         self._log.clear()

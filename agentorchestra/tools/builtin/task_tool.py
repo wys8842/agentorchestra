@@ -54,6 +54,7 @@ class TaskTool(Tool):
         self.config = config or Config()
 
     def get_parameters(self) -> List[ToolParameter]:
+        """实现 Tool 协议：返回子代理任务参数定义（task/agent_type/tool_filter/max_steps）"""
         return [
             ToolParameter(
                 name="task",

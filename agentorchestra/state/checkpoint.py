@@ -45,6 +45,7 @@ class Checkpoint:
     created_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典（created_at 用 ISO8601 字符串）。"""
         return {
             "thread_id": self.thread_id,
             "checkpoint_id": self.checkpoint_id,
@@ -56,6 +57,7 @@ class Checkpoint:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Checkpoint":
+        """从字典反序列化（兼容 ISO8601 字符串或 datetime）。"""
         return cls(
             thread_id=d["thread_id"],
             checkpoint_id=d["checkpoint_id"],
@@ -273,10 +275,12 @@ def json_default(obj: Any) -> Any:
 
 
 def dumps_json(obj: Any) -> str:
+    """序列化任意对象为 JSON 字符串（含 datetime 兜底）。"""
     return json.dumps(obj, ensure_ascii=False, default=json_default)
 
 
 def loads_json(s: str) -> Any:
+    """反序列化 JSON 字符串；空串返回 None。"""
     if not s:
         return None
     return json.loads(s)

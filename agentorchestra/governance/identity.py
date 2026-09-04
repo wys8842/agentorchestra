@@ -20,6 +20,7 @@ class IdentityContext:
     roles: List[str] = field(default_factory=list)
 
     def has_role(self, role: str) -> bool:
+        """是否拥有指定角色。"""
         return role in self.roles
 
 
@@ -51,10 +52,12 @@ class IdentityService:
 
     @property
     def principal(self) -> str:
+        """当前 principal。"""
         return self.current().principal
 
     @property
     def roles(self) -> List[str]:
+        """当前角色列表。"""
         return self.current().roles
 
     # ---------------- 上下文 ----------------
@@ -92,6 +95,7 @@ class IdentityService:
         _current_identity.set(IdentityContext(principal=principal, roles=roles or []))
 
     def clear(self) -> None:
+        """清除当前上下文身份（回退默认 anonymous）。"""
         _current_identity.set(None)
 
 
@@ -113,6 +117,7 @@ def current_principal() -> str:
 
 
 def current_roles() -> List[str]:
+    """读取当前角色列表（无则空列表）。"""
     return get_identity_service().roles
 
 

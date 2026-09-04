@@ -48,6 +48,7 @@ class Embedder:
 
     @property
     def available(self) -> bool:
+        """是否启用且有可用 LLM。"""
         return self._enabled and self.llm is not None
 
     def embed(self, text: str) -> Optional[List[float]]:

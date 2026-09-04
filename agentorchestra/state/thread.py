@@ -35,6 +35,7 @@ class ThreadState:
 
     @classmethod
     def from_row(cls, row: Dict[str, Any]) -> "ThreadState":
+        """从存储行构造（兼容 datetime 或 ISO8601 字符串）。"""
         return cls(
             thread_id=row["thread_id"],
             status=ThreadStatus(row.get("status", "active")),

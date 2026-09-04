@@ -137,6 +137,7 @@ class TodoWriteTool(Tool):
         self.current_todos = TodoList(summary="")
 
     def get_parameters(self) -> List[ToolParameter]:
+        """实现 Tool 协议：返回待办列表参数定义（summary/todos/action）"""
         return [
             ToolParameter(
                 name="summary",

@@ -61,6 +61,7 @@ class SkillTool(Tool):
         self.skill_loader = skill_loader
 
     def get_parameters(self) -> List[ToolParameter]:
+        """实现 Tool 协议：返回技能加载参数定义（skill/args）"""
         return [
             ToolParameter(
                 name="skill",

@@ -82,6 +82,7 @@ class OntologyEngine:
     # ==================== 语义注册 ====================
 
     def register_object_type(self, object_type: ObjectType) -> "OntologyEngine":
+        """注册对象类型（对象存储 + 词汇校验器同步）"""
         self.object_types[object_type.api_name] = object_type
         self.object_store.register_type(object_type)
         # 同步词汇校验器（引用同一注册表，直接更新）
@@ -109,20 +110,24 @@ class OntologyEngine:
         return self.object_store.get_superclasses(type_name)
 
     def register_action(self, action: ActionType) -> "OntologyEngine":
+        """注册动作（同步到工作流引擎）"""
         self.actions[action.api_name] = action
         # 同步到流程引擎（工作流可引用该动作）
         self.workflow.register_action(action)
         return self
 
     def register_function(self, function: Function) -> "OntologyEngine":
+        """注册函数"""
         self.functions[function.api_name] = function
         return self
 
     def register_interface(self, interface: Interface) -> "OntologyEngine":
+        """注册接口"""
         self.interfaces[interface.api_name] = interface
         return self
 
     def implement_interface(self, interface_name: str, object_type_name: str) -> None:
+        """让对象类型实现接口（属性不满足则报错）"""
         interface = self.interfaces.get(interface_name)
         obj_type = self.object_types.get(object_type_name)
         if not interface or not obj_type:
@@ -135,21 +140,26 @@ class OntologyEngine:
     # ==================== 治理 ====================
 
     def allow(self, roles: List[str], resource: str = "*", action: str = "*") -> None:
+        """配置安全规则：允许角色对资源执行动作"""
         self.security.allow(roles, resource, action)
 
     def register_materialization(self, target: MaterializationTarget) -> None:
+        """注册物化目标"""
         self.materialization.register_target(target)
 
     def snapshot_branch(self, name: str) -> bool:
+        """创建分支快照并返回是否成功"""
         self.branching.create_branch(name, self.object_store)
         return True
 
     def switch_branch(self, name: str) -> bool:
+        """切换到指定分支"""
         return self.branching.switch_to(name, self.object_store)
 
     # ==================== 工具生成与挂载（解耦核心） ====================
 
     def build_tools(self) -> List[Tool]:
+        """为全部对象类型/动作/函数生成 Tool"""
         tools: List[Tool] = []
         for obj_type in self.object_types.values():
             tools.append(self.tool_generator.object_query_tool(obj_type))
@@ -169,6 +179,7 @@ class OntologyEngine:
     # ==================== 工具 ====================
 
     def describe(self) -> str:
+        """返回引擎能力清单文本"""
         return (f"OntologyEngine 能力清单:\n"
                 f"  对象类型 ({len(self.object_types)}): {', '.join(self.object_types) or '无'}\n"
                 f"  动作 ({len(self.actions)}): {', '.join(self.actions) or '无'}\n"
@@ -176,6 +187,7 @@ class OntologyEngine:
                 f"  接口 ({len(self.interfaces)}): {', '.join(self.interfaces) or '无'}")
 
     def stats(self) -> Dict[str, Any]:
+        """返回引擎统计信息"""
         return {
             "object_types": len(self.object_types),
             "actions": len(self.actions),

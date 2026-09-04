@@ -23,6 +23,7 @@ class MaterializationTarget:
 
     def write(self, operation: str, type_name: str,
               obj: Dict[str, Any], patch: Optional[Dict] = None) -> bool:
+        """执行回写函数，返回是否成功"""
         return self.write_fn(operation, type_name, obj, patch)
 
     def to_tx_action(self) -> Any:
@@ -77,6 +78,7 @@ class MaterializationManager:
         self._log: List[Dict[str, Any]] = []
 
     def register_target(self, target: MaterializationTarget) -> None:
+        """注册物化目标"""
         self._targets[target.name] = target
 
     def materialize(self, operation: str, type_name: str,
@@ -111,7 +113,9 @@ class MaterializationManager:
         return results
 
     def get_log(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """查询物化日志（最新在前）"""
         return list(reversed(self._log))[:limit]
 
     def clear_log(self) -> None:
+        """清空物化日志"""
         self._log.clear()

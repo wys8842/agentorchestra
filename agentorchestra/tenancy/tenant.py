@@ -51,6 +51,7 @@ class TenantManager:
 
     @staticmethod
     def tenant_id() -> Optional[str]:
+        """当前租户 id；无则 None。"""
         ctx = _current_tenant.get()
         return ctx.tenant_id if ctx else None
 

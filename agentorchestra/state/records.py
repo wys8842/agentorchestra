@@ -113,6 +113,7 @@ class InboxMessage:
 
     @property
     def expired(self) -> bool:
+        """是否已超过过期时间。"""
         return self.expires_at is not None and self.expires_at < datetime.now()
 
 

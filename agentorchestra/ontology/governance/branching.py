@@ -30,9 +30,11 @@ class BranchManager:
         return branch
 
     def list_branches(self) -> List[str]:
+        """列出全部分支名"""
         return list(self._branches.keys())
 
     def get_active(self) -> str:
+        """返回当前活动分支名"""
         return self._active
 
     def switch_to(self, name: str, store) -> bool:
@@ -65,6 +67,7 @@ class BranchManager:
         return True
 
     def delete_branch(self, name: str) -> bool:
+        """删除分支，返回是否删除成功"""
         if name in self._branches:
             del self._branches[name]
             return True

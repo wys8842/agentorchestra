@@ -325,12 +325,14 @@ class MemoryManager:
     # ==================== 删除/统计 ====================
 
     def forget(self, entry_id: str) -> bool:
+        """删除一条记忆（同步清理索引），返回是否存在。"""
         ok = self.store.delete(entry_id)
         if ok:
             self.keyword_index.delete(entry_id)
         return ok
 
     def stats(self) -> Dict[str, Any]:
+        """返回记忆系统统计信息。"""
         return {
             "store": self.store.stats(),
             "dedup_threshold": self.dedup_threshold,
@@ -340,6 +342,7 @@ class MemoryManager:
         }
 
     def close(self) -> None:
+        """关闭底层存储。"""
         try:
             self.store.close()
         except Exception:

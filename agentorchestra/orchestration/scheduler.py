@@ -63,6 +63,7 @@ class GraphScheduler:
         iteration: Dict[str, int] = {}
 
         def emit(ev: NodeEvent) -> None:
+            """记录事件并触发 on_node_error 回调（兼容协程）。"""
             result.events.append(ev)
             if ev.event_type == NodeEventType.NODE_ERROR and on_node_error:
                 try:

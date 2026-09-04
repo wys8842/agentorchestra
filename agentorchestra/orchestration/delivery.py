@@ -35,6 +35,7 @@ class DeliveryManager:
         self._on_event: Optional[Callable[[DeliveryEvent], Any]] = None
 
     def on_event(self, cb: Callable[[DeliveryEvent], Any]) -> None:
+        """注册投递事件回调。"""
         self._on_event = cb
 
     def _emit(self, ev: DeliveryEvent) -> None:

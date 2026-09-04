@@ -14,6 +14,7 @@ class SecurityContext:
         self.roles = roles or []
 
     def has_role(self, role: str) -> bool:
+        """判断上下文是否拥有指定角色"""
         return role in self.roles
 
 
@@ -26,6 +27,7 @@ class PermissionRule:
         self.roles = roles
 
     def allows(self, resource: str, action: str, ctx: SecurityContext) -> bool:
+        """判断资源/动作是否对该上下文放行"""
         if self.resource != "*" and self.resource != resource:
             return False
         if self.action != "*" and self.action != action:
@@ -40,9 +42,11 @@ class SecurityManager:
         self._rules: List[PermissionRule] = []
 
     def add_rule(self, rule: PermissionRule) -> None:
+        """添加权限规则"""
         self._rules.append(rule)
 
     def allow(self, roles: List[str], resource: str = "*", action: str = "*") -> None:
+        """便捷授权：允许角色对资源执行动作"""
         self.add_rule(PermissionRule(resource, action, roles))
 
     def check(self, resource: str, action: str, ctx: SecurityContext) -> bool:

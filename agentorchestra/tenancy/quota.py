@@ -40,14 +40,17 @@ class TokenQuota:
 
     @property
     def unlimited(self) -> bool:
+        """是否不限量（limit < 0）。"""
         return self.limit < 0
 
     def can_charge(self, tokens: int) -> bool:
+        """本次扣减后是否会超限。"""
         if self.unlimited:
             return True
         return (self.used + tokens) <= self.limit
 
     def remaining(self) -> int:
+        """剩余可用 tokens（不限返回 -1）。"""
         return -1 if self.unlimited else max(0, self.limit - self.used)
 
 

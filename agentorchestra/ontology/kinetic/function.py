@@ -33,12 +33,15 @@ class Function:
                 self.arguments[a.name] = a
 
     def get_arguments(self) -> List[ToolParameter]:
+        """列出全部参数定义"""
         return list(self.arguments.values())
 
     def call(self, args: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Any:
+        """调用底层实现并返回结果"""
         return self.impl(args or {}, ctx or {})
 
     def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典"""
         return {
             "api_name": self.api_name,
             "display_name": self.display_name,

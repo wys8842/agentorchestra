@@ -41,6 +41,7 @@ class AgentNode(Node):
         self._input_key = input_key
 
     def create_agent(self) -> Agent:
+        """实例化 Agent（可选应用 system_prompt 覆盖）。"""
         agent = self._agent_factory()
         if self._system_prompt is not None:
             agent.system_prompt = self._system_prompt

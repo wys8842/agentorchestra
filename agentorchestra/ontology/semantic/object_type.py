@@ -54,13 +54,16 @@ class ObjectType:
     # ==================== 属性 ====================
 
     def add_property(self, prop: ToolParameter) -> "ObjectType":
+        """添加属性"""
         self.properties[prop.name] = prop
         return self
 
     def get_property(self, name: str) -> Optional[ToolParameter]:
+        """按名称获取属性定义"""
         return self.properties.get(name)
 
     def get_properties(self) -> List[ToolParameter]:
+        """列出全部属性定义"""
         return list(self.properties.values())
 
     def required_properties(self) -> List[ToolParameter]:
@@ -78,19 +81,23 @@ class ObjectType:
         return prop_name in self.derived_properties
 
     def add_derived_property(self, name: str) -> "ObjectType":
+        """将属性标记为派生（值由 Function 计算，不可直接写）"""
         self.derived_properties.add(name)
         return self
 
     # ==================== 链接 ====================
 
     def add_link_type(self, link: LinkType) -> "ObjectType":
+        """添加链接类型"""
         self.link_types[link.name] = link
         return self
 
     def get_link_type(self, name: str) -> Optional[LinkType]:
+        """按名称获取链接类型"""
         return self.link_types.get(name)
 
     def get_link_types(self) -> List[LinkType]:
+        """列出全部链接类型"""
         return list(self.link_types.values())
 
     # ==================== 校验 ====================
@@ -152,6 +159,7 @@ class ObjectType:
         return isinstance(value, expected)
 
     def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典"""
         return {
             "api_name": self.api_name,
             "display_name": self.display_name,

@@ -49,6 +49,7 @@ class Interrupt:
     resolved_at: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典（状态/时间为可读字符串）。"""
         return {
             "token": self.token,
             "thread_id": self.thread_id,

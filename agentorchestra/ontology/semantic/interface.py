@@ -24,15 +24,18 @@ class Interface:
         self._implementations: List[str] = []
 
     def add_required_property(self, name: str) -> "Interface":
+        """添加必需属性"""
         if name not in self.required_properties:
             self.required_properties.append(name)
         return self
 
     def register_implementation(self, object_type_name: str) -> None:
+        """注册实现该接口的对象类型"""
         if object_type_name not in self._implementations:
             self._implementations.append(object_type_name)
 
     def get_implementations(self) -> List[str]:
+        """返回实现该接口的对象类型名列表"""
         return list(self._implementations)
 
     def check_implements(self, object_type) -> bool:
@@ -41,6 +44,7 @@ class Interface:
         return set(self.required_properties).issubset(obj_props)
 
     def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典"""
         return {
             "api_name": self.api_name,
             "display_name": self.display_name,

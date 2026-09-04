@@ -28,6 +28,12 @@ DEFAULT_REACT_SYSTEM_PROMPT = """你是一个具备推理和行动能力的 AI �
 
 
 class ReActAgent(Agent):
+    """ReAct（推理-行动）循环 Agent，基于 Function Calling 执行
+
+    内置 Thought（记录推理）与 Finish（返回最终答案）两种内置工具，
+    支持同步 run、异步 arun 与流式 arun_stream 三种执行方式。
+    """
+
     def __init__(
         self,
         name: str,

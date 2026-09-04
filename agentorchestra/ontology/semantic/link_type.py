@@ -27,6 +27,7 @@ class LinkType:
         self.description = description
 
     def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典"""
         return {
             "name": self.name,
             "from_type": self.from_type,

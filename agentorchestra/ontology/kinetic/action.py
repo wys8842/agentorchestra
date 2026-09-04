@@ -43,10 +43,12 @@ class ActionType:
         self.idempotent = idempotent
 
     def add_parameter(self, prop: ToolParameter) -> "ActionType":
+        """添加参数"""
         self.parameters[prop.name] = prop
         return self
 
     def get_parameters(self) -> List[ToolParameter]:
+        """列出全部参数定义"""
         return list(self.parameters.values())
 
     def execute(self, params: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
@@ -130,9 +132,11 @@ class ActionType:
         })
 
     def get_audit(self) -> List[Dict[str, Any]]:
+        """返回动作自身的审计记录"""
         return list(self._audit)
 
     def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典"""
         return {
             "api_name": self.api_name,
             "display_name": self.display_name,

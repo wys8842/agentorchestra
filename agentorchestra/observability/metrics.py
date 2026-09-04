@@ -50,15 +50,15 @@ class NoOpCollector(MetricsCollector):
 
     def increment(self, name: str, value: float = 1.0,
                   labels: Optional[Dict[str, str]] = None) -> None:
-        return None
+        """NoOp：丢弃。"""
 
     def observe(self, name: str, value: float,
                 labels: Optional[Dict[str, str]] = None) -> None:
-        return None
+        """NoOp：丢弃。"""
 
     def gauge(self, name: str, value: float,
               labels: Optional[Dict[str, str]] = None) -> None:
-        return None
+        """NoOp：丢弃。"""
 
 
 class PrometheusTextCollector(MetricsCollector):
@@ -113,14 +113,17 @@ class PrometheusTextCollector(MetricsCollector):
 
     def increment(self, name: str, value: float = 1.0,
                   labels: Optional[Dict[str, str]] = None) -> None:
+        """计数器累加。"""
         self._counter(name).inc(value, labels)
 
     def observe(self, name: str, value: float,
                 labels: Optional[Dict[str, str]] = None) -> None:
+        """记录观测值到直方图。"""
         self._histogram(name).observe(value, labels)
 
     def gauge(self, name: str, value: float,
               labels: Optional[Dict[str, str]] = None) -> None:
+        """设置 gauge 值。"""
         self._gauge(name).set(value, labels)
 
     def render(self) -> str:

@@ -17,24 +17,37 @@ class BaseStorageBackend(ABC):
     """存储后端接口"""
 
     @abstractmethod
-    def register_type(self, type_name: str) -> None: ...
+    def register_type(self, type_name: str) -> None:
+        """注册对象类型"""
+        ...
 
     @abstractmethod
-    def put(self, type_name: str, pk: str, obj: Dict[str, Any]) -> None: ...
+    def put(self, type_name: str, pk: str, obj: Dict[str, Any]) -> None:
+        """写入对象"""
+        ...
 
     @abstractmethod
-    def get(self, type_name: str, pk: str) -> Optional[Dict[str, Any]]: ...
+    def get(self, type_name: str, pk: str) -> Optional[Dict[str, Any]]:
+        """读取对象"""
+        ...
 
     @abstractmethod
-    def delete(self, type_name: str, pk: str) -> Optional[Dict[str, Any]]: ...
+    def delete(self, type_name: str, pk: str) -> Optional[Dict[str, Any]]:
+        """删除对象"""
+        ...
 
     @abstractmethod
-    def all(self, type_name: str) -> List[Dict[str, Any]]: ...
+    def all(self, type_name: str) -> List[Dict[str, Any]]:
+        """列出类型下全部对象"""
+        ...
 
     @abstractmethod
-    def types(self) -> List[str]: ...
+    def types(self) -> List[str]:
+        """列出已注册类型名"""
+        ...
 
-    def close(self) -> None:  # 可选：关闭后端
+    def close(self) -> None:
+        """关闭后端（可选）"""
         pass
 
 
@@ -45,24 +58,31 @@ class MemoryBackend(BaseStorageBackend):
         self._objects: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
     def register_type(self, type_name: str) -> None:
+        """实现 BaseStorageBackend 协议：注册类型"""
         self._objects.setdefault(type_name, {})
 
     def put(self, type_name: str, pk: str, obj: Dict[str, Any]) -> None:
+        """实现 BaseStorageBackend 协议：写入（全量覆盖）"""
         self._objects.setdefault(type_name, {})[pk] = dict(obj)
 
     def get(self, type_name: str, pk: str) -> Optional[Dict[str, Any]]:
+        """实现 BaseStorageBackend 协议：读取"""
         return self._objects.get(type_name, {}).get(pk)
 
     def delete(self, type_name: str, pk: str) -> Optional[Dict[str, Any]]:
+        """实现 BaseStorageBackend 协议：删除并返回原对象"""
         return self._objects.get(type_name, {}).pop(pk, None)
 
     def all(self, type_name: str) -> List[Dict[str, Any]]:
+        """实现 BaseStorageBackend 协议：列出全部对象"""
         return list(self._objects.get(type_name, {}).values())
 
     def types(self) -> List[str]:
+        """实现 BaseStorageBackend 协议：列出类型名"""
         return list(self._objects.keys())
 
     def clear(self) -> None:
+        """实现 BaseStorageBackend 协议：清空全部数据"""
         self._objects.clear()
 
 
@@ -106,10 +126,11 @@ class SQLiteBackend(BaseStorageBackend):
             raise RuntimeError(f"SQLiteBackend 已关闭: {self.db_path}")
 
     def register_type(self, type_name: str) -> None:
-        # SQLite 无需预注册类型
+        """实现 BaseStorageBackend 协议：SQLite 无需预注册类型"""
         pass
 
     def put(self, type_name: str, pk: str, obj: Dict[str, Any]) -> None:
+        """实现 BaseStorageBackend 协议：写入（UPSERT）"""
         data = json.dumps(obj, ensure_ascii=False)
         with self._lock:
             self._check_open()
@@ -120,6 +141,7 @@ class SQLiteBackend(BaseStorageBackend):
             self._conn.commit()
 
     def get(self, type_name: str, pk: str) -> Optional[Dict[str, Any]]:
+        """实现 BaseStorageBackend 协议：读取"""
         with self._lock:
             self._check_open()
             row = self._conn.execute(
@@ -131,6 +153,7 @@ class SQLiteBackend(BaseStorageBackend):
         return json.loads(row[0])
 
     def delete(self, type_name: str, pk: str) -> Optional[Dict[str, Any]]:
+        """实现 BaseStorageBackend 协议：删除并返回原对象"""
         obj = self.get(type_name, pk)
         if obj is not None:
             with self._lock:
@@ -141,6 +164,7 @@ class SQLiteBackend(BaseStorageBackend):
         return obj
 
     def all(self, type_name: str) -> List[Dict[str, Any]]:
+        """实现 BaseStorageBackend 协议：列出全部对象"""
         with self._lock:
             self._check_open()
             rows = self._conn.execute(
@@ -148,12 +172,14 @@ class SQLiteBackend(BaseStorageBackend):
         return [json.loads(r[0]) for r in rows]
 
     def types(self) -> List[str]:
+        """实现 BaseStorageBackend 协议：列出已存在类型名"""
         with self._lock:
             self._check_open()
             rows = self._conn.execute("SELECT DISTINCT type FROM objects").fetchall()
         return [r[0] for r in rows]
 
     def close(self) -> None:
+        """实现 BaseStorageBackend 协议：关闭数据库连接"""
         with self._lock:
             if self._closed:
                 return
@@ -161,6 +187,7 @@ class SQLiteBackend(BaseStorageBackend):
             self._conn.close()
 
     def clear(self) -> None:
+        """实现 BaseStorageBackend 协议：清空全部对象"""
         with self._lock:
             self._check_open()
             self._conn.execute("DELETE FROM objects")

@@ -120,13 +120,16 @@ class ObjectStore:
     # ==================== 类型注册 ====================
 
     def register_type(self, object_type: ObjectType) -> None:
+        """注册对象类型（类型表 + 索引同步）"""
         self._types[object_type.api_name] = object_type
         self.index.register_type(object_type.api_name)
 
     def get_type(self, api_name: str) -> Optional[ObjectType]:
+        """按 api_name 获取对象类型定义"""
         return self._types.get(api_name)
 
     def list_types(self) -> List[str]:
+        """列出已注册对象类型名"""
         return list(self._types.keys())
 
     def _materialize(self, operation: str, type_name: str,
@@ -292,6 +295,7 @@ class ObjectStore:
         return merged
 
     def delete(self, type_name: str, pk: str) -> bool:
+        """删除对象（索引/图/审计联动），返回是否删除成功"""
         pk = str(pk)
         removed = self.index.remove_object(type_name, pk)
         if removed:
@@ -316,24 +320,30 @@ class ObjectStore:
     # ==================== 对象读取 ====================
 
     def get(self, type_name: str, pk: str) -> Optional[Dict[str, Any]]:
+        """读取对象，不存在返回 None"""
         return self.index.get(type_name, str(pk))
 
     def list_objects(self, type_name: str) -> List[Dict[str, Any]]:
+        """列出类型下全部对象"""
         return self.index.list(type_name)
 
     def search(self, type_name: str, query: str,
                fields: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """全文搜索（包含匹配）"""
         return self.index.search(type_name, query, fields)
 
     def filter(self, type_name: str, conditions: Dict[str, Any],
                operators: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+        """按条件过滤对象（支持比较操作符）"""
         return self.index.filter(type_name, conditions, operators)
 
     def aggregate(self, type_name: str, group_by: str, agg: str = "count",
                   agg_field: Optional[str] = None) -> Dict[str, Any]:
+        """按字段分组聚合统计"""
         return self.index.aggregate(type_name, group_by, agg, agg_field)
 
     def count(self, type_name: str) -> int:
+        """统计类型下对象数量"""
         return self.index.count(type_name)
 
     # ==================== 链接 ====================
@@ -448,6 +458,7 @@ class ObjectStore:
         return obj_type
 
     def stats(self) -> Dict[str, Any]:
+        """返回对象存储统计信息"""
         return {
             "types": len(self._types),
             "objects": {t: self.index.count(t) for t in self._types},

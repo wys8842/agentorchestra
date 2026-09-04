@@ -35,6 +35,7 @@ class NodeEvent:
     error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典（时间用 ISO8601 字符串）。"""
         return {
             "event_type": self.event_type.value,
             "node_name": self.node_name,

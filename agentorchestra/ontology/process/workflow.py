@@ -117,6 +117,7 @@ class Workflow:
         path = []
 
         def dfs(node_id: str) -> Optional[List[str]]:
+            """DFS 回溯检测环，命中时返回环路径"""
             visited.add(node_id)
             rec_stack.add(node_id)
             path.append(node_id)
@@ -180,9 +181,11 @@ class WorkflowEngine:
         self._workflows[workflow.name] = workflow
 
     def get_workflow(self, name: str) -> Optional[Workflow]:
+        """按名称获取工作流定义"""
         return self._workflows.get(name)
 
     def list_workflows(self) -> List[str]:
+        """列出已注册工作流名"""
         return list(self._workflows.keys())
 
     # ==================== 执行 ====================

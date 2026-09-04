@@ -36,8 +36,10 @@ def retry_with_backoff(
     exceptions = retryable_exceptions or (SymphonyException,)
 
     def decorator(func: Callable) -> Callable:
+        """将函数包装为带重试逻辑的版本"""
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            """执行目标函数，失败时按指数退避重试"""
             last_error = None
             for attempt in range(max_retries + 1):
                 try:

@@ -329,6 +329,7 @@ class Agent(ABC):
 
     @system_prompt.setter
     def system_prompt(self, value: Optional[str]) -> None:
+        """设置基础 system_prompt（不含记忆前缀，由 getter 负责拼接）"""
         self._system_prompt_base = value
 
     @property

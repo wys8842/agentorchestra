@@ -54,6 +54,7 @@ class TransactionManager:
         return action
 
     def get_action(self, name: str) -> Optional[CompensatingAction]:
+        """按名称获取已注册动作"""
         return self._actions.get(name)
 
     def set_coordinator(self, coordinator: Any) -> None:
@@ -256,4 +257,5 @@ class TransactionManager:
         return list(reversed(self._tx_log))[:limit]
 
     def clear_log(self) -> None:
+        """清空事务日志"""
         self._tx_log.clear()

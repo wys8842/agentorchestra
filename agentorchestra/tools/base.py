@@ -33,6 +33,7 @@ def tool_action(name: Optional[str] = None, description: Optional[str] = None):
         description: 工具描述（如果不提供，从 docstring 提取）
     """
     def decorator(func: Callable):
+        """实际装饰逻辑：标记函数为工具 action 并记录元数据"""
         func._is_tool_action = True  # type: ignore[attr-defined]
         func._tool_name = name  # type: ignore[attr-defined]
         func._tool_description = description  # type: ignore[attr-defined]
