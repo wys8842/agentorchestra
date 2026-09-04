@@ -25,6 +25,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from ..checkpoint import Checkpoint, CheckpointStore, dumps_json, loads_json
 from ..interrupt import Interrupt, InterruptStatus
 from ..records import (
+    AuditEntry,
     DLQEntry,
     IdempotencyRecord,
     InboxMessage,
@@ -172,6 +173,25 @@ class _InboxAckRow(Base):
     ack_token: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="acked")
     acked_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class _AuditLogRow(Base):
+    __tablename__ = "audit_log"
+
+    entry_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    principal: Mapped[str] = mapped_column(String(255), nullable=False)
+    resource: Mapped[str] = mapped_column(String(255), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    obj_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    success: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    detail_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tx_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    __table_args__ = (
+        Index("idx_audit_resource", "resource"),
+        Index("idx_audit_principal", "principal"),
+    )
 
 
 class SQLAlchemyCheckpointStore(CheckpointStore):
@@ -853,3 +873,50 @@ class SQLAlchemyCheckpointStore(CheckpointStore):
                 )
             )
             return result.rowcount or 0
+
+    # ---------------- 审计（M3 WORM） ----------------
+
+    async def append_audit(self, entry: AuditEntry) -> None:
+        assert self._engine is not None
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                insert(_AuditLogRow).values(
+                    ts=entry.ts,
+                    principal=entry.principal,
+                    resource=entry.resource,
+                    action=entry.action,
+                    obj_id=entry.obj_id,
+                    success=1 if entry.success else 0,
+                    detail_json=dumps_json(entry.detail) if entry.detail else None,
+                    tx_id=entry.tx_id,
+                )
+            )
+
+    async def query_audit(
+        self,
+        limit: int = 100,
+        principal: Optional[str] = None,
+        resource: Optional[str] = None,
+    ) -> List[AuditEntry]:
+        assert self._engine is not None
+        async with self._engine.connect() as conn:
+            stmt = select(_AuditLogRow)
+            if principal:
+                stmt = stmt.where(_AuditLogRow.principal == principal)
+            if resource:
+                stmt = stmt.where(_AuditLogRow.resource == resource)
+            stmt = stmt.order_by(_AuditLogRow.entry_id.desc()).limit(limit)
+            rows = (await conn.execute(stmt)).all()
+            return [
+                AuditEntry(
+                    principal=r.principal,
+                    resource=r.resource,
+                    action=r.action,
+                    obj_id=r.obj_id,
+                    success=bool(r.success),
+                    detail=loads_json(r.detail_json) if r.detail_json else {},
+                    tx_id=r.tx_id,
+                    ts=r.ts,
+                )
+                for r in rows
+            ]

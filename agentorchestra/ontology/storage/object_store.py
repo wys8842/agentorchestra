@@ -20,7 +20,8 @@ class ObjectStore:
     def __init__(self, graph: Optional[GraphStore] = None,
                  backend: Optional[BaseStorageBackend] = None,
                  materializer: Optional[Any] = None,
-                 wal_hook: Optional[Any] = None):
+                 wal_hook: Optional[Any] = None,
+                 enable_object_identity: bool = True):
         """初始化对象存储
 
         Args:
@@ -29,6 +30,7 @@ class ObjectStore:
             materializer: 物化管理器（可选，写操作后触发物化回写）
             wal_hook: WAL hook（可选，M0+），签名 wal_hook(thread_id, action_type, payload)
                 所有 insert/update/delete 操作会调用 hook。失败不阻断主流程。
+            enable_object_identity: 是否自动注入 version/created_tx/last_modified_tx（M3）。
         """
         self.index = ObjectIndex(backend=backend or MemoryBackend())
         self.graph = graph or GraphStore()
@@ -41,6 +43,47 @@ class ObjectStore:
         import threading as _threading
         self._wal_lock = _threading.Lock()
         self._wal_queue: List[Dict[str, Any]] = []
+        # M3：对象身份（version 自动注入）+ 审计
+        self.enable_object_identity = enable_object_identity
+        self.audit: Optional[Any] = None  # AuditManager（可选）
+        self.audit_backend: Optional[Any] = None  # 持久化 backend（CheckpointStore）
+        self._tx_context: Optional[str] = None  # 当前 tx_id（identity 用）
+
+    def configure_governance(self, audit: Optional[Any] = None,
+                             audit_backend: Optional[Any] = None) -> None:
+        """装配 M3 治理：审计管理器 + 持久化 backend。"""
+        self.audit = audit
+        self.audit_backend = audit_backend
+
+    def set_tx_context(self, tx_id: Optional[str]) -> None:
+        """设置当前事务上下文（created_tx/last_modified_tx 用）。"""
+        self._tx_context = tx_id
+
+    # ==================== 治理辅助（M3） ====================
+
+    def _current_principal(self) -> str:
+        """读取当前 principal（ContextVar 优先；兜底 anonymous）。"""
+        try:
+            from ...governance.identity import current_principal
+            return current_principal()
+        except Exception:
+            return "anonymous"
+
+    def _audit_write(self, action: str, type_name: str, pk: str,
+                     success: bool = True, detail: Optional[Dict] = None) -> None:
+        """写审计（若装配；失败不阻断）。"""
+        if self.audit is None:
+            return
+        try:
+            self.audit.log(
+                principal=self._current_principal(),
+                resource=type_name,
+                action=action,
+                detail={**(detail or {}), "obj_id": pk},
+                success=success,
+            )
+        except Exception:
+            pass
 
     def set_wal_thread_id(self, thread_id: Optional[str]) -> None:
         """设置当前 thread 上下文（M0 WAL 标签用）。
@@ -143,6 +186,13 @@ class ObjectStore:
             if p.name not in obj and p.default is not None:
                 obj[p.name] = p.default
 
+        # M3：注入对象身份（version/created_tx/last_modified_tx）
+        if self.enable_object_identity:
+            tx = self._tx_context or "none"
+            obj["version"] = 1
+            obj["created_tx"] = tx
+            obj["last_modified_tx"] = tx
+
         self.index.index_object(type_name, pk, obj)
 
         # 同步图节点（显式 name，避免与业务字段 name 冲突）
@@ -160,12 +210,21 @@ class ObjectStore:
         # 物化回写（可选）
         self._materialize("insert", type_name, dict(obj))
 
+        # 审计（M3）
+        self._audit_write("insert", type_name, pk)
+
         result = self.index.get(type_name, pk)
         assert result is not None
         return result
 
-    def update(self, type_name: str, pk: str, patch: Dict[str, Any]) -> Dict[str, Any]:
-        """更新对象（部分字段，合并后重新校验）"""
+    def update(self, type_name: str, pk: str, patch: Dict[str, Any],
+               expected_version: Optional[int] = None) -> Dict[str, Any]:
+        """更新对象（部分字段，合并后重新校验）
+
+        Args:
+            expected_version: M3 CAS 校验：调用方读取对象时的 version。
+                提交时版本不一致 → 抛 TxConflict。None = 不校验（向后兼容）。
+        """
         obj_type = self._require_type(type_name)
         pk = str(pk)
 
@@ -181,6 +240,16 @@ class ObjectStore:
         if not current:
             raise ValueError(f"对象不存在: {type_name}/{pk}")
 
+        # M3：CAS 校验（版本不一致 → TxConflict）
+        if expected_version is not None:
+            from ...tx.context import TxConflict
+            cur_ver = int(current.get("version", 0) or 0)
+            if cur_ver != expected_version:
+                raise TxConflict(
+                    f"CAS 冲突: {type_name}/{pk} 当前 version={cur_ver}，"
+                    f"期望 {expected_version}"
+                )
+
         merged = dict(current)
         merged.update(patch)
 
@@ -188,6 +257,15 @@ class ObjectStore:
         errors = obj_type.validate_object(merged)
         if errors:
             raise ValueError(f"对象校验失败: {errors}")
+
+        # M3：version 递增 + last_modified_tx
+        if self.enable_object_identity:
+            merged["version"] = int(merged.get("version", 0) or 0) + 1
+            merged["last_modified_tx"] = self._tx_context or merged.get(
+                "last_modified_tx", "none")
+            # patch 内若有系统字段由引擎覆盖（拒绝用户伪造 version）
+            patch = {k: v for k, v in patch.items()
+                     if k not in ObjectType.SYSTEM_FIELDS}
 
         self.index.update_object(type_name, pk, merged)
         self.graph.merge_node(
@@ -205,6 +283,12 @@ class ObjectStore:
 
         # 物化回写（可选）
         self._materialize("update", type_name, dict(merged), patch=dict(patch))
+
+        # 审计（M3）
+        self._audit_write("update", type_name, pk, detail={
+            "version": merged.get("version"),
+            "patch_keys": list(patch.keys()),
+        })
         return merged
 
     def delete(self, type_name: str, pk: str) -> bool:
@@ -223,6 +307,10 @@ class ObjectStore:
             })
             # 物化回写（可选）
             self._materialize("delete", type_name, {"pk": pk}, patch=dict(removed))
+            # 审计（M3）
+            self._audit_write("delete", type_name, pk, detail={
+                "version": removed.get("version"),
+            })
         return removed is not None
 
     # ==================== 对象读取 ====================

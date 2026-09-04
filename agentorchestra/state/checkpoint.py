@@ -13,7 +13,13 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from .interrupt import Interrupt
-    from .records import DLQEntry, IdempotencyRecord, InboxMessage, LockRecord
+    from .records import (
+        AuditEntry,
+        DLQEntry,
+        IdempotencyRecord,
+        InboxMessage,
+        LockRecord,
+    )
     from .snapshot import Snapshot
     from .wal import WALEntry
 
@@ -232,6 +238,21 @@ class CheckpointStore(ABC):
     @abstractmethod
     async def delete_expired_messages(self) -> int:
         """清理过期消息（expires_at < now），返回删除条数。"""
+
+    # ---------------- 审计（M3 WORM） ----------------
+
+    @abstractmethod
+    async def append_audit(self, entry: AuditEntry) -> None:
+        """追加审计条目（append-only；不提供 update/delete）。"""
+
+    @abstractmethod
+    async def query_audit(
+        self,
+        limit: int = 100,
+        principal: Optional[str] = None,
+        resource: Optional[str] = None,
+    ) -> List[AuditEntry]:
+        """查询审计条目（按时间倒序）。"""
 
     # ---------------- 便捷 ----------------
 

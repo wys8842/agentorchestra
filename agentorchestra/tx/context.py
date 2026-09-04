@@ -76,6 +76,28 @@ class TxContext:
     resources: List[str] = field(default_factory=list)
     result: Dict[str, Any] = field(default_factory=dict)
     failure: Optional[Exception] = None
+    # M3：事务身份与权限
+    principal: str = "anonymous"
+    roles: List[str] = field(default_factory=list)
+    permission_checker: Optional[Any] = None  # PermissionChecker
+
+    def authorize(
+        self,
+        resource: str,
+        permission: str,
+        obj_id: Optional[str] = None,
+    ) -> None:
+        """权限检查（RBAC + ACL）。拒绝 → 抛 PermissionDenied。
+
+        未装配 permission_checker → 放行（最小可用：权限可选）。
+        """
+        if self.permission_checker is None:
+            return
+        self.permission_checker.check(
+            resource, permission,
+            principal=self.principal, roles=self.roles, obj_id=obj_id,
+            raise_on_deny=True,
+        )
 
     async def pre_condition(
         self,

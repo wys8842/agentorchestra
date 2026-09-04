@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from ..checkpoint import Checkpoint, CheckpointStore
 from ..interrupt import Interrupt, InterruptStatus
 from ..records import (
+    AuditEntry,
     DLQEntry,
     IdempotencyRecord,
     InboxAck,
@@ -46,6 +47,7 @@ class InMemoryCheckpointStore(CheckpointStore):
         self._dlq: List[DLQEntry] = []
         self._inbox_messages: Dict[str, InboxMessage] = {}
         self._inbox_acks: Dict[str, InboxAck] = {}
+        self._audit: List[AuditEntry] = []
 
     async def init(self) -> None:
         return None
@@ -316,3 +318,23 @@ class InMemoryCheckpointStore(CheckpointStore):
             for mid in expired:
                 del self._inbox_messages[mid]
             return len(expired)
+
+    # ---------------- 审计（M3 WORM） ----------------
+
+    async def append_audit(self, entry: AuditEntry) -> None:
+        with self._lock:
+            self._audit.append(entry)
+
+    async def query_audit(
+        self,
+        limit: int = 100,
+        principal: Optional[str] = None,
+        resource: Optional[str] = None,
+    ) -> List[AuditEntry]:
+        with self._lock:
+            entries = self._audit
+            if principal:
+                entries = [e for e in entries if e.principal == principal]
+            if resource:
+                entries = [e for e in entries if e.resource == resource]
+            return list(reversed(entries))[:limit]

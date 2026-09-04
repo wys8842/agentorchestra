@@ -54,6 +54,7 @@ class TransactionCoordinator:
         idempotency_ttl: int = 86400,
         lock_ttl: float = 30.0,
         thread_id: str = "default",
+        permission_checker: Optional[Any] = None,
     ):
         if store is None:
             store = InMemoryCheckpointStore()
@@ -63,6 +64,7 @@ class TransactionCoordinator:
         self.compensation_backoff = compensation_backoff
         self.lock_ttl = lock_ttl
         self.thread_id = thread_id
+        self.permission_checker = permission_checker  # M3：PermissionChecker
 
         self._actions: Dict[str, TxAction] = {}
 
@@ -119,12 +121,18 @@ class TransactionCoordinator:
         idempotency_key: Optional[str] = None,
         resources: Optional[List[str]] = None,
         timeout: float = 30.0,
+        principal: Optional[str] = None,
+        roles: Optional[List[str]] = None,
+        permission_checker: Optional[Any] = None,
     ) -> AsyncIterator[TxContext]:
         """事务上下文管理器。
 
         幂等键自动生成：sha256(actions 签名)。
         进入即 begin（幂等查重 + 获取资源锁 + TX_BEGIN）。
         退出无异常 → commit；异常 → 逆序补偿 + DLQ。
+
+        M3：principal/roles 注入当前身份（IdentityService + ctx）；
+        permission_checker 可选（未提供回退 coordinator 装配的）。
         """
         resources = resources or []
         tx_id = f"tx-{uuid.uuid4().hex[:12]}"
@@ -147,11 +155,28 @@ class TransactionCoordinator:
             again = await self.idempotency.get(key)
             raise TxReplay(result=again.result if again else None)
 
-        ctx = TxContext(tx_id=tx_id, coordinator=self)
+        principal = principal or "anonymous"
+        roles = roles or []
+        ctx = TxContext(
+            tx_id=tx_id, coordinator=self,
+            principal=principal, roles=roles,
+            permission_checker=permission_checker or self.permission_checker,
+        )
 
         # 获取资源锁（乐观锁）
         acquired: List[str] = []
+        identity_token = None
         try:
+            # M3：注入身份到 ContextVar（IdentityService），供审计/ACL 读取
+            from ..governance.identity import (  # type: ignore[attr-defined]
+                IdentityContext,
+                _current_identity,
+            )
+
+            identity_token = _current_identity.set(
+                IdentityContext(principal=principal, roles=roles)
+            )
+
             for rk in resources:
                 if await self.lock.acquire(rk, tx_id):
                     acquired.append(rk)
@@ -187,6 +212,11 @@ class TransactionCoordinator:
             # 动作执行失败 / 用户代码异常 → 补偿
             await self._compensate_and_fail(ctx, key, str(e))
             raise
+        finally:
+            if identity_token is not None:
+                from ..governance.identity import _current_identity  # type: ignore[attr-defined]
+
+                _current_identity.reset(identity_token)
 
     async def _commit(self, ctx: TxContext, key: str) -> None:
         """提交：幂等 completed + TX_COMMIT + 释放锁。"""

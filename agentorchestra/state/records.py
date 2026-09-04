@@ -131,3 +131,30 @@ class InboxAck:
     ack_token: Optional[str] = None
     status: str = "acked"
     acked_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
+class AuditEntry:
+    """审计条目（audit_log 表，M3 WORM）。
+
+    WORM 语义：只允许 append + query，接口层不提供 update/delete。
+
+    Attributes:
+        principal: 操作者
+        resource: 资源（对象类型名 或 "order:o1"）
+        action: 动作（read/write/delete/execute...）
+        obj_id: 对象 id（行级，可选）
+        success: 是否成功
+        detail: 附加详情（JSON 可序列化）
+        tx_id: 关联事务 id（可选）
+        ts: 时间戳
+    """
+
+    principal: str
+    resource: str
+    action: str
+    obj_id: Optional[str] = None
+    success: bool = True
+    detail: Dict[str, Any] = field(default_factory=dict)
+    tx_id: Optional[str] = None
+    ts: datetime = field(default_factory=datetime.now)

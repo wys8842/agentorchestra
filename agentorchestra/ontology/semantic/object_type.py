@@ -16,6 +16,9 @@ from .link_type import LinkType
 class ObjectType:
     """对象类型定义"""
 
+    # M3（P3）：系统保留字段（由 ObjectStore 自动注入/维护，不属业务属性）
+    SYSTEM_FIELDS = {"version", "created_tx", "last_modified_tx"}
+
     def __init__(
         self,
         api_name: str,
@@ -108,16 +111,17 @@ class ObjectType:
                 if not self._valid_type(p.type, obj[p.name]):
                     errors.append(f"属性 '{p.name}' 类型错误，期望 {p.type}")
 
-        # 统一词汇强制：拒绝未声明的属性
+        # 统一词汇强制：拒绝未声明的属性（豁免系统保留字段）
         for key in obj:
-            if key not in self.properties:
+            if key not in self.properties and key not in self.SYSTEM_FIELDS:
                 errors.append(f"属性 '{key}' 未在对象类型 '{self.api_name}' 中定义")
 
         return errors
 
     def unknown_properties(self, obj: Dict[str, Any]) -> List[str]:
-        """返回对象中未声明的属性名（统一词汇校验）"""
-        return [k for k in obj if k not in self.properties]
+        """返回对象中未声明的属性名（统一词汇校验；豁免系统保留字段）"""
+        return [k for k in obj if k not in self.properties
+                and k not in self.SYSTEM_FIELDS]
 
     # ==================== 类层次 ====================
 
