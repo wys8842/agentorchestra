@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from .interrupt import Interrupt
-    from .records import DLQEntry, IdempotencyRecord, LockRecord
+    from .records import DLQEntry, IdempotencyRecord, InboxMessage, LockRecord
     from .snapshot import Snapshot
     from .wal import WALEntry
 
@@ -202,6 +202,36 @@ class CheckpointStore(ABC):
         self, limit: int = 100, status: str = "open"
     ) -> List[DLQEntry]:
         """列出死信条目（默认 open）。"""
+
+    # ---------------- Inbox（M2 图通信） ----------------
+
+    @abstractmethod
+    async def enqueue_message(self, msg: InboxMessage) -> None:
+        """入队一条消息（status=queued）。同 msg_id 覆盖。"""
+
+    @abstractmethod
+    async def list_pending_messages(
+        self, thread_id: str, to_node: Optional[str] = None, limit: int = 100
+    ) -> List[InboxMessage]:
+        """列出指定 thread（可选 to_node）的 queued 消息。"""
+
+    @abstractmethod
+    async def mark_delivered(self, msg_id: str, ack_token: str) -> None:
+        """标记已投递（status=delivered + attempts+1 + delivered_at + ack_token）。"""
+
+    @abstractmethod
+    async def mark_failed(self, msg_id: str, error: str, attempts: int) -> None:
+        """标记投递失败（status=failed）。"""
+
+    @abstractmethod
+    async def ack_message(
+        self, msg_id: str, ack_token: Optional[str] = None, status: str = "acked"
+    ) -> None:
+        """写回执到 inbox_acks 表（acked/rejected）。"""
+
+    @abstractmethod
+    async def delete_expired_messages(self) -> int:
+        """清理过期消息（expires_at < now），返回删除条数。"""
 
     # ---------------- 便捷 ----------------
 

@@ -24,7 +24,12 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from ..checkpoint import Checkpoint, CheckpointStore, dumps_json, loads_json
 from ..interrupt import Interrupt, InterruptStatus
-from ..records import DLQEntry, IdempotencyRecord, LockRecord
+from ..records import (
+    DLQEntry,
+    IdempotencyRecord,
+    InboxMessage,
+    LockRecord,
+)
 from ..snapshot import Snapshot
 from ..thread import ThreadStatus
 from ..wal import WALActionType, WALEntry
@@ -136,6 +141,37 @@ class _DLQRow(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class _InboxMessageRow(Base):
+    __tablename__ = "inbox_messages"
+
+    msg_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    graph_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    thread_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    from_node: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    to_node: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    condition: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    ack_token: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    __table_args__ = (
+        Index("idx_inbox_thread_status", "thread_id", "status"),
+    )
+
+
+class _InboxAckRow(Base):
+    __tablename__ = "inbox_acks"
+
+    msg_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    ack_token: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="acked")
+    acked_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 class SQLAlchemyCheckpointStore(CheckpointStore):
@@ -697,3 +733,123 @@ class SQLAlchemyCheckpointStore(CheckpointStore):
                 )
                 for r in rows
             ]
+
+    # ---------------- Inbox（M2） ----------------
+
+    async def enqueue_message(self, msg: InboxMessage) -> None:
+        assert self._engine is not None
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                insert(_InboxMessageRow).values(
+                    msg_id=msg.msg_id,
+                    graph_id=msg.graph_id,
+                    thread_id=msg.thread_id,
+                    from_node=msg.from_node,
+                    to_node=msg.to_node,
+                    content_json=dumps_json(msg.content),
+                    condition=msg.condition,
+                    status=msg.status,
+                    attempts=msg.attempts,
+                    created_at=msg.created_at,
+                    expires_at=msg.expires_at,
+                    delivered_at=msg.delivered_at,
+                    ack_token=msg.ack_token,
+                )
+            )
+
+    async def list_pending_messages(
+        self, thread_id: str, to_node: Optional[str] = None, limit: int = 100
+    ) -> List[InboxMessage]:
+        assert self._engine is not None
+        async with self._engine.connect() as conn:
+            stmt = select(_InboxMessageRow).where(
+                (_InboxMessageRow.thread_id == thread_id)
+                & (_InboxMessageRow.status == "queued")
+            )
+            if to_node is not None:
+                stmt = stmt.where(_InboxMessageRow.to_node == to_node)
+            stmt = stmt.order_by(_InboxMessageRow.created_at.asc()).limit(limit)
+            rows = (await conn.execute(stmt)).all()
+            return [self._row_to_inbox_msg(r) for r in rows]
+
+    @staticmethod
+    def _row_to_inbox_msg(r: Any) -> InboxMessage:
+        return InboxMessage(
+            msg_id=r.msg_id,
+            graph_id=r.graph_id,
+            thread_id=r.thread_id,
+            from_node=r.from_node,
+            to_node=r.to_node,
+            content=loads_json(r.content_json),
+            condition=r.condition,
+            status=r.status,
+            attempts=r.attempts,
+            created_at=r.created_at,
+            expires_at=r.expires_at,
+            delivered_at=r.delivered_at,
+            ack_token=r.ack_token,
+        )
+
+    async def mark_delivered(self, msg_id: str, ack_token: str) -> None:
+        assert self._engine is not None
+        from sqlalchemy import update
+
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                update(_InboxMessageRow)
+                .where(_InboxMessageRow.msg_id == msg_id)
+                .values(
+                    status="delivered",
+                    delivered_at=datetime.now(),
+                    ack_token=ack_token,
+                )
+            )
+
+    async def mark_failed(self, msg_id: str, error: str, attempts: int) -> None:
+        assert self._engine is not None
+        from sqlalchemy import update
+
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                update(_InboxMessageRow)
+                .where(_InboxMessageRow.msg_id == msg_id)
+                .values(status="failed", attempts=attempts)
+            )
+
+    async def ack_message(
+        self, msg_id: str, ack_token: Optional[str] = None, status: str = "acked"
+    ) -> None:
+        assert self._engine is not None
+        from sqlalchemy import delete, update
+
+        async with self._engine.begin() as conn:
+            # upsert ack
+            await conn.execute(
+                delete(_InboxAckRow).where(_InboxAckRow.msg_id == msg_id)
+            )
+            await conn.execute(
+                insert(_InboxAckRow).values(
+                    msg_id=msg_id,
+                    ack_token=ack_token,
+                    status=status,
+                    acked_at=datetime.now(),
+                )
+            )
+            # 消息同步状态到 acked
+            await conn.execute(
+                update(_InboxMessageRow)
+                .where(_InboxMessageRow.msg_id == msg_id)
+                .values(status=status)
+            )
+
+    async def delete_expired_messages(self) -> int:
+        assert self._engine is not None
+        from sqlalchemy import delete
+
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                delete(_InboxMessageRow).where(
+                    _InboxMessageRow.expires_at < datetime.now()
+                )
+            )
+            return result.rowcount or 0

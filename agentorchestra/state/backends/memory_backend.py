@@ -11,7 +11,13 @@ from typing import Any, Dict, List, Optional
 
 from ..checkpoint import Checkpoint, CheckpointStore
 from ..interrupt import Interrupt, InterruptStatus
-from ..records import DLQEntry, IdempotencyRecord, LockRecord
+from ..records import (
+    DLQEntry,
+    IdempotencyRecord,
+    InboxAck,
+    InboxMessage,
+    LockRecord,
+)
 from ..snapshot import Snapshot
 from ..thread import ThreadStatus
 from ..wal import WALEntry
@@ -38,6 +44,8 @@ class InMemoryCheckpointStore(CheckpointStore):
         self._locks: Dict[str, LockRecord] = {}
         self._idempotency: Dict[str, IdempotencyRecord] = {}
         self._dlq: List[DLQEntry] = []
+        self._inbox_messages: Dict[str, InboxMessage] = {}
+        self._inbox_acks: Dict[str, InboxAck] = {}
 
     async def init(self) -> None:
         return None
@@ -249,3 +257,62 @@ class InMemoryCheckpointStore(CheckpointStore):
             return [
                 e for e in self._dlq if e.status == status
             ][:limit]
+
+    # ---------------- Inbox（M2） ----------------
+
+    async def enqueue_message(self, msg: InboxMessage) -> None:
+        with self._lock:
+            self._inbox_messages[msg.msg_id] = msg
+
+    async def list_pending_messages(
+        self, thread_id: str, to_node: Optional[str] = None, limit: int = 100
+    ) -> List[InboxMessage]:
+        with self._lock:
+            result = []
+            for m in self._inbox_messages.values():
+                if m.thread_id != thread_id or m.status != "queued":
+                    continue
+                if to_node is not None and m.to_node != to_node:
+                    continue
+                if m.expired:
+                    continue
+                result.append(m)
+            result.sort(key=lambda m: m.created_at)
+            return result[:limit]
+
+    async def mark_delivered(self, msg_id: str, ack_token: str) -> None:
+        with self._lock:
+            m = self._inbox_messages.get(msg_id)
+            if m:
+                m.status = "delivered"
+                m.attempts += 1
+                m.delivered_at = datetime.now()
+                m.ack_token = ack_token
+
+    async def mark_failed(self, msg_id: str, error: str, attempts: int) -> None:
+        with self._lock:
+            m = self._inbox_messages.get(msg_id)
+            if m:
+                m.status = "failed"
+                m.attempts = attempts
+
+    async def ack_message(
+        self, msg_id: str, ack_token: Optional[str] = None, status: str = "acked"
+    ) -> None:
+        with self._lock:
+            ack = InboxAck(msg_id=msg_id, ack_token=ack_token, status=status)
+            self._inbox_acks[msg_id] = ack
+            m = self._inbox_messages.get(msg_id)
+            if m:
+                m.status = status
+
+    async def delete_expired_messages(self) -> int:
+        now = datetime.now()
+        with self._lock:
+            expired = [
+                mid for mid, m in self._inbox_messages.items()
+                if m.expires_at is not None and m.expires_at < now
+            ]
+            for mid in expired:
+                del self._inbox_messages[mid]
+            return len(expired)

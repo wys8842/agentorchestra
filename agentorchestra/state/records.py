@@ -1,7 +1,8 @@
-"""records - 锁 / 幂等键 / DLQ 记录类型（M1 事务引擎用）。
+"""records - 锁 / 幂等键 / DLQ / Inbox 记录类型（M1 事务引擎 / M2 图通信用）。
 
-放在 state 包内，使 CheckpointStore 抽象能引用它们而不引入对 tx/ 的反向依赖。
-设计见 docs/superpowers/specs/2026-09-03-m1-transaction-runtime-design.md §4.1
+放在 state 包内，使 CheckpointStore 抽象能引用它们而不引入对 tx/ 或 orchestration/ 的反向依赖。
+- 锁/幂等/DLQ 设计见 docs/superpowers/specs/2026-09-03-m1-transaction-runtime-design.md §4.1
+- Inbox 设计见 docs/superpowers/specs/2026-09-04-m2-agent-graph-design.md §4
 """
 
 from __future__ import annotations
@@ -74,3 +75,59 @@ class DLQEntry:
     status: str = "open"
     created_at: datetime = field(default_factory=datetime.now)
     resolved_at: Optional[datetime] = None
+
+
+@dataclass
+class InboxMessage:
+    """Inbox 消息（inbox_messages 表，M2 图通信）。
+
+    Attributes:
+        msg_id: 全局唯一消息 id
+        graph_id: 所属图实例
+        thread_id: 所属 thread
+        from_node: 源节点（None = 图入口）
+        to_node: 目标节点
+        content: 消息内容（任意 JSON 可序列化 dict）
+        condition: 条件边标签（None = 无条件，总是投递）
+        status: queued | delivered | failed | expired | acked
+        attempts: 投递尝试次数
+        created_at: 入队时间
+        expires_at: TTL 过期时间（默认 +7 天）
+        delivered_at: 最后投递时间
+        ack_token: 投递回执 token
+    """
+
+    msg_id: str
+    graph_id: str
+    thread_id: str
+    to_node: str
+    content: Dict[str, Any]
+    from_node: Optional[str] = None
+    condition: Optional[str] = None
+    status: str = "queued"
+    attempts: int = 0
+    created_at: datetime = field(default_factory=datetime.now)
+    expires_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    ack_token: Optional[str] = None
+
+    @property
+    def expired(self) -> bool:
+        return self.expires_at is not None and self.expires_at < datetime.now()
+
+
+@dataclass
+class InboxAck:
+    """投递回执（inbox_acks 表，M2 图通信）。
+
+    Attributes:
+        msg_id: 关联消息 id
+        ack_token: 回执 token
+        status: acked | rejected
+        acked_at: 回执时间
+    """
+
+    msg_id: str
+    ack_token: Optional[str] = None
+    status: str = "acked"
+    acked_at: datetime = field(default_factory=datetime.now)
