@@ -225,6 +225,7 @@ class TransactionCoordinator:
         if not isinstance(self.store, InMemoryCheckpointStore):
             await self.tx_log.log_commit(ctx.tx_id, TxStatus.COMMITTED.value)
         await self.lock.release_all(ctx.tx_id)
+        self._emit_tx_metric(ctx, result="committed")
 
     async def _compensate_and_fail(
         self, ctx: TxContext, key: str, reason: str
@@ -243,3 +244,45 @@ class TransactionCoordinator:
             await self.tx_log.log_commit(ctx.tx_id, ctx.status.value)
         await self.idempotency.mark_failed(key, ctx.tx_id)
         await self.lock.release_all(ctx.tx_id)
+
+        # M5：SLO 指标（回滚/补偿触发）
+        self._emit_tx_metric(ctx, result="aborted", reason=reason)
+        for failed in comp_result["failed"]:
+            self._emit_compensation_metric(failed["action"])
+
+    # ---------------- M5 可观测性（SLO 指标） ----------------
+
+    def _emit_tx_metric(
+        self, ctx: TxContext, result: str, reason: str = ""
+    ) -> None:
+        """发事务 SLO 指标（NoOp 默认零影响）。"""
+        import time
+
+        from ..observability.metrics import (
+            SLO_TX_DURATION_SECONDS,
+            get_default_collector,
+        )
+
+        try:
+            col = get_default_collector()
+            elapsed = time.monotonic() - ctx.started
+            col.observe(SLO_TX_DURATION_SECONDS, max(elapsed, 0.0),
+                        {"result": result})
+            if result != "committed":
+                col.increment("tx_rollback_total", 1, {"reason": reason or "abort"})
+        except Exception:
+            pass
+
+    def _emit_compensation_metric(self, action_name: str) -> None:
+        """发补偿触发指标。"""
+        from ..observability.metrics import (
+            SLO_TX_COMPENSATION_TRIGGERED,
+            get_default_collector,
+        )
+
+        try:
+            col = get_default_collector()
+            col.increment(SLO_TX_COMPENSATION_TRIGGERED, 1,
+                          {"action": action_name})
+        except Exception:
+            pass

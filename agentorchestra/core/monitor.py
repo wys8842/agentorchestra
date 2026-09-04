@@ -116,6 +116,14 @@ class MonitorServer:
                 return self.metrics_provider()
             except Exception as e:
                 return f"# 指标生成失败: {e}"
+        # M5：回退到 observability SLO collector（Prometheus 文本；NoOp 则空）
+        try:
+            from ..observability.metrics import get_default_collector
+            text = get_default_collector().render()
+            if text:
+                return text
+        except Exception:
+            pass
         return "# 未配置 metrics_provider"
 
     def _get_health(self) -> Dict:

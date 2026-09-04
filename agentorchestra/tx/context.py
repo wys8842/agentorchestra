@@ -80,6 +80,8 @@ class TxContext:
     principal: str = "anonymous"
     roles: List[str] = field(default_factory=list)
     permission_checker: Optional[Any] = None  # PermissionChecker
+    # M5：事务开始单调时钟（指标耗时）
+    started: float = field(default_factory=lambda: __import__("time").monotonic())
 
     def authorize(
         self,
