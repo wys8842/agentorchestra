@@ -17,6 +17,13 @@ Workflow / Scheduler / Transaction 负责执行编排。
 - **Skills 知识外化**：渐进式披露（元数据 + 按需 body），节省 Token
 - **跨会话持久记忆**：长期/短期/工作之外的"跨任务记忆"，混合检索（关键词+向量）
 - **企业级运维**：结构化日志、Prometheus 指标、分布式追踪、限流、配置热更新、健康检查、监控端点
+- **企业级就绪（P0–P6）**：
+  - **持久化与恢复**：WAL + Checkpoint + Snapshot + HITL interrupt（`state/`）
+  - **事务运行时**：幂等 + 补偿 + DLQ + 乐观锁（`tx/`）
+  - **Agent 图/DAG 通信**：条件边 + Inbox + 有界回环（`orchestration/`）
+  - **对象身份与权限**：RBAC + 行级 ACL + WORM 审计（`governance/`）
+  - **多租户**：tenant namespace 隔离 + token 配额 + 用量导出（`tenancy/`）
+  - **企业级可观测**：Prometheus 文本指标 + 可选 OTLP trace（零依赖）
 
 ## 安装
 
@@ -61,13 +68,18 @@ result = agent.run("帮我分析这个项目")
 ```
 agentorchestra/
 ├── agents/           # Agent 范式（Simple/ReAct/Reflection/PlanSolve/Loop + 工厂）
-├── core/             # 核心运行时（LLM/Config/Message/Agent 基类/可靠性/运维）
+├── core/             # 核心运行时（LLM/Config/Message/Agent 基类/可靠性/运维/追踪）
 ├── tools/            # 工具系统（Tool 基类/注册表/内置工具/子代理过滤）
 ├── context/          # 上下文工程（历史/Token 计数/GSSC/截断）
-├── observability/    # 可观测性（TraceLogger）
+├── observability/    # 可观测性（TraceLogger + Prometheus 指标 + 可选 OTLP）
 ├── skills/           # Skills 知识外化（SkillLoader/Skill）
 ├── memory/           # 跨会话持久记忆（Manager/混合检索/Summarizer/工具）
-└── ontology/         # 企业级 Ontology（语义/动能/存储/治理/流程/工具生成）
+├── ontology/         # 企业级 Ontology（语义/动能/存储/治理/流程/工具生成）
+├── state/            # P0 持久化与恢复（Checkpoint/WAL/Thread/Interrupt/Snapshot）
+├── tx/               # P1 事务运行时（Coordinator/幂等/补偿/DLQ/乐观锁）
+├── orchestration/    # P2 Agent 图/DAG 通信（Graph/Inbox/节点/Scheduler）
+├── governance/       # P3 对象身份与权限（Identity/ACL/Permission/CAS/WORM）
+└── tenancy/          # P6 多租户（Tenant 上下文/配额/用量导出）
 ```
 
 ## 文档
@@ -81,6 +93,12 @@ agentorchestra/
 | observability | [docs/observability/README.md](docs/observability/README.md) |
 | memory | [docs/memory/README.md](docs/memory/README.md) |
 | ontology | [docs/ontology/README.md](docs/ontology/README.md) |
+| state（P0 持久化） | [docs/state/README.md](docs/state/README.md) |
+| tx（P1 事务运行时） | [docs/tx/README.md](docs/tx/README.md) |
+| orchestration（P2 图通信） | [docs/orchestration/README.md](docs/orchestration/README.md) |
+| governance（P3 权限） | [docs/governance/README.md](docs/governance/README.md) |
+| tenancy（P6 多租户） | [docs/tenancy/README.md](docs/tenancy/README.md) |
+| 企业级路线图 P0–P6 | [docs/enterprise/README.md](docs/enterprise/README.md) + [specs](docs/superpowers/specs/) |
 
 ## 开发
 
