@@ -101,6 +101,7 @@ class Config(BaseModel):
     # 异步生命周期配置
     async_enabled: bool = True  # 是否启用异步执行
     max_concurrent_tools: int = 3  # 最大并发工具数
+    max_concurrent_subagents: int = 2  # M4: 最大并发子 Agent 数（信号量限流）
     hook_timeout_seconds: float = 5.0  # 生命周期钩子超时时间（秒）
     llm_async_timeout: int = 120  # LLM 异步调用超时时间（秒）
     tool_async_timeout: int = 30  # 工具异步调用超时时间（秒）

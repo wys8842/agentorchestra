@@ -119,6 +119,28 @@ class MemoryManager:
             tau_max_days=tau_max,
         )
 
+    @staticmethod
+    def _resolve_namespace(namespace: Optional[str]) -> str:
+        """namespace 解析（M6 多租户）。
+
+        - 显式 namespace 且带 tenant 前缀 → 原样返回
+        - tenant 上下文存在 → 前缀 tenant.namespace（隔离）
+        - 否则 → 显式 namespace 或 default
+        """
+        try:
+            from ..tenancy.tenant import TenantManager
+            tenant = TenantManager.current()
+        except Exception:
+            tenant = None
+
+        ns = namespace or "default"
+        if tenant is None:
+            return ns
+        # 已带 tenant 前缀则不再叠加
+        if ns.startswith(tenant.tenant_id + ":"):
+            return ns
+        return f"{tenant.namespace}:{ns}" if ns != "default" else tenant.namespace
+
     # ==================== 写入 ====================
 
     def remember(
@@ -147,7 +169,7 @@ class MemoryManager:
         if not content or not content.strip():
             raise ValueError("content 不能为空")
 
-        ns = namespace or self.default_namespace
+        ns = self._resolve_namespace(namespace)
         entry = MemoryEntry(
             type=type,
             content=content.strip(),
@@ -268,7 +290,7 @@ class MemoryManager:
             types: 类型过滤
             namespace: 命名空间（None → 使用 default_namespace）
         """
-        ns = namespace or self.default_namespace
+        ns = self._resolve_namespace(namespace)
         return self.retriever.recall(
             query,
             top_k=top_k,
@@ -289,7 +311,7 @@ class MemoryManager:
         types_set = None
         if types:
             types_set = {t.value if isinstance(t, MemoryType) else str(t) for t in types}
-        ns = namespace or self.default_namespace
+        ns = self._resolve_namespace(namespace)
         items: List[MemoryEntry] = []
         for entry in self.store.iter_all(namespace=ns):
             if types_set is not None:

@@ -35,6 +35,8 @@ class SymphonyLLM:
         timeout: Optional[int] = None,
         max_retries: int = 3,
         retry_base_delay: float = 1.0,
+        quota_manager: Optional[Any] = None,     # M6: QuotaManager（可选）
+        usage_recorder: Optional[Any] = None,    # M6: UsageRecorder（可选）
         **kwargs
     ):
         """
@@ -101,6 +103,28 @@ class SymphonyLLM:
         self.metrics = get_metrics()
         self.tracer = get_tracer()
         self.provider = self.base_url.split("//")[-1].split(".")[0] if "//" in self.base_url else "custom"
+
+        # M6：多租户配额与用量记录（可选；无 tenant context 不计数）
+        self.quota_manager = quota_manager
+        self.usage_recorder = usage_recorder
+
+    # ==================== M6 配额/用量辅助 ====================
+
+    def _charge_and_record(self, tokens: int, latency_ms: float) -> None:
+        """配额扣减 + 用量记录（仅当有 quota/recorder 且 tenant context 存在）。"""
+        from ..tenancy.tenant import TenantManager
+
+        tenant_id = TenantManager.tenant_id()
+        if tenant_id is None:
+            return  # 无租户上下文：不计费（向后兼容）
+
+        if self.quota_manager is not None:
+            self.quota_manager.charge(tenant_id, tokens)
+
+        if self.usage_recorder is not None:
+            self.usage_recorder.record(
+                tenant_id=tenant_id, model=self.model or "",
+                tokens=tokens, latency_ms=latency_ms)
 
     def think(self, messages: List[Dict[str, str]], temperature: Optional[float] = None) -> Iterator[str]:
         """
@@ -191,6 +215,11 @@ class SymphonyLLM:
             self.logger.info("LLM 调用完成", extra={
                 "model": self.model, "duration_ms": round(latency_ms, 1),
                 "tokens": tokens})
+            # M6：多租户配额 + 用量（成功返回前；超限抛 QuotaExceeded）
+            try:
+                self._charge_and_record(tokens, latency_ms)
+            except Exception:
+                raise
             return response
 
     def stream_invoke(self, messages: List[Dict[str, str]], **kwargs) -> Iterator[str]:

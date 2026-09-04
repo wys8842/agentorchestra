@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from .config import Config
 from .lifecycle import AgentEvent, EventType, LifecycleHook
@@ -256,6 +256,9 @@ class Agent(ABC):
                 if self.config.debug:
                     self.logger.warning(f"Checkpoint store 未启用（{e}）")
                 self.checkpoint_store = None
+
+        # M4：子 Agent 并发信号量（懒建；Config.max_concurrent_subagents）
+        self._subagent_semaphore = None
 
     def _init_checkpoint_store(self) -> None:
         """初始化 CheckpointStore（M0）。
@@ -1743,3 +1746,44 @@ class Agent(ABC):
             raise RuntimeError("Checkpoint store 未启用")
         await self.checkpoint_store.resolve_interrupt(token, response)
         self._pending_resume_response = response
+
+    # ==================== M4 / P4 - 并发收敛 ====================
+
+    def get_subagent_semaphore(self):
+        """获取子 Agent 并发信号量（按 Config.max_concurrent_subagents 懒建）。"""
+        if self._subagent_semaphore is None:
+            limit = max(1, int(getattr(self.config, "max_concurrent_subagents", 2)))
+            self._subagent_semaphore = asyncio.Semaphore(limit)
+        return self._subagent_semaphore
+
+    async def run_subagents_concurrently(
+        self,
+        tasks: List[Callable[[], Any]],
+    ) -> List[Any]:
+        """并发执行一组子 Agent 任务，受 max_concurrent_subagents 信号量限流。
+
+        Args:
+            tasks: 无参 async callable 列表（如 [lambda: agent.arun(t), ...]）
+
+        Returns:
+            各任务结果（保序）
+        """
+        sem = self.get_subagent_semaphore()
+
+        async def _run(task):
+            async with sem:
+                result = task()
+                if asyncio.iscoroutine(result):
+                    return await result
+                return await asyncio.to_thread(result) if callable(result) else result
+
+        return await asyncio.gather(*[_run(t) for t in tasks])
+
+    def get_concurrency_info(self) -> Dict[str, Any]:
+        """当前并发配置摘要（供观测/测试）。"""
+        return {
+            "max_concurrent_subagents": max(
+                1, int(getattr(self.config, "max_concurrent_subagents", 2))),
+            "max_concurrent_tools": int(
+                getattr(self.config, "max_concurrent_tools", 3)),
+        }
