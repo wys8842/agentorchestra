@@ -25,6 +25,49 @@ class MaterializationTarget:
               obj: Dict[str, Any], patch: Optional[Dict] = None) -> bool:
         return self.write_fn(operation, type_name, obj, patch)
 
+    def to_tx_action(self) -> Any:
+        """把物化目标包装成事务动作（M1）。
+
+        返回 `agentorchestra.tx.TxAction`：执行 = write，补偿 = write 反向操作。
+        反向操作映射：insert→delete、update→重写 before、delete→insert before。
+        对象数据从 write_fn 的业务侧持久化上下文取（operation/obj/patch）。
+
+        注意：此方法提供"物化动作包成 TxAction"的能力；默认业务路径不强制使用
+        （保留现有 materialize 直写语义，向后兼容）。
+        """
+        from ...tx.context import TxAction
+
+        def _execute_fn(params, _tx_ctx=None) -> bool:
+            op = params.get("operation", "update")
+            return self.write(
+                op,
+                params.get("type_name", ""),
+                params.get("obj", {}),
+                params.get("patch"),
+            )
+
+        def _compensate_fn(params, _tx_ctx=None) -> bool:
+            # 反向写（Saga 补偿）：用 before 快照复原
+            reverse_op = {"insert": "delete", "update": "update",
+                          "delete": "insert"}.get(
+                              params.get("operation", "update"), "update")
+            reverse_params = dict(params)
+            reverse_params["operation"] = reverse_op
+            if "before" in params and reverse_op == "update":
+                reverse_params["obj"] = params["before"]
+            return self.write(
+                reverse_op,
+                params.get("type_name", ""),
+                params.get("obj", {}),
+                params.get("patch"),
+            )
+
+        return TxAction(
+            name=f"materialize:{self.name}",
+            execute_fn=_execute_fn,
+            compensate_fn=_compensate_fn,
+        )
+
 
 class MaterializationManager:
     """物化管理器"""

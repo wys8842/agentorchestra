@@ -26,6 +26,7 @@ class ActionType:
         rules: Optional[List[Callable]] = None,
         side_effects: Optional[List[Callable]] = None,
         display_name: Optional[str] = None,
+        idempotent: bool = True,
     ):
         self.api_name = api_name
         self.display_name = display_name or api_name
@@ -38,6 +39,8 @@ class ActionType:
         self.rules = rules or []
         self.side_effects = side_effects or []
         self._audit: List[Dict[str, Any]] = []
+        # M1：动作级重放安全标记（事务引擎据此决定幂等）
+        self.idempotent = idempotent
 
     def add_parameter(self, prop: ToolParameter) -> "ActionType":
         self.parameters[prop.name] = prop
@@ -138,6 +141,7 @@ class ActionType:
             "rules_count": len(self.rules),
             "side_effects_count": len(self.side_effects),
             "audit_count": len(self._audit),
+            "idempotent": self.idempotent,
         }
 
     def __repr__(self) -> str:

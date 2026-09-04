@@ -24,6 +24,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from ..checkpoint import Checkpoint, CheckpointStore, dumps_json, loads_json
 from ..interrupt import Interrupt, InterruptStatus
+from ..records import DLQEntry, IdempotencyRecord, LockRecord
 from ..snapshot import Snapshot
 from ..thread import ThreadStatus
 from ..wal import WALActionType, WALEntry
@@ -98,6 +99,41 @@ class _InterruptRow(Base):
     payload_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     response_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class _LockRow(Base):
+    __tablename__ = "locks"
+
+    resource_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    owner_tx: Mapped[str] = mapped_column(String(128), nullable=False)
+    held_since: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class _IdempotencyRow(Base):
+    __tablename__ = "idempotency_keys"
+
+    idempotency_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    tx_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
+    result_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class _DLQRow(Base):
+    __tablename__ = "dead_letter"
+
+    dlq_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tx_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    action_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
@@ -437,3 +473,227 @@ class SQLAlchemyCheckpointStore(CheckpointStore):
                 created_at=row.created_at,
                 resolved_at=row.resolved_at,
             )
+
+    # ---------------- 锁（M1） ----------------
+
+    async def acquire_lock(
+        self, resource_key: str, owner_tx: str, ttl_seconds: float = 30.0
+    ) -> Optional[LockRecord]:
+        assert self._engine is not None
+        from sqlalchemy import delete
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        now = datetime.now()
+        expires_at = None
+        if ttl_seconds and ttl_seconds > 0:
+            from datetime import timedelta
+
+            expires_at = now + timedelta(seconds=ttl_seconds)
+
+        async with self._engine.begin() as conn:
+            # ① 已存在且未过期：加锁失败
+            row = (
+                await conn.execute(
+                    select(_LockRow).where(_LockRow.resource_key == resource_key)
+                )
+            ).first()
+            if row is not None:
+                exp = row.expires_at
+                if exp is None or exp > now:
+                    return None
+                # 过期锁：抢占（先删旧锁）
+                await conn.execute(
+                    delete(_LockRow).where(_LockRow.resource_key == resource_key)
+                )
+
+            # ② 插入锁（首次 version=0；on conflict 防并发抢占双插）
+            if self._dialect == "sqlite":
+                stmt: Any = sqlite_insert(_LockRow).values(
+                    resource_key=resource_key,
+                    version=0,
+                    owner_tx=owner_tx,
+                    held_since=now,
+                    expires_at=expires_at,
+                ).on_conflict_do_nothing(index_elements=["resource_key"])
+            else:
+                from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+                stmt = pg_insert(_LockRow).values(
+                    resource_key=resource_key,
+                    version=0,
+                    owner_tx=owner_tx,
+                    held_since=now,
+                    expires_at=expires_at,
+                ).on_conflict_do_nothing(index_elements=["resource_key"])
+            result = await conn.execute(stmt)
+            # 若冲突（并发抢锁），回读检查 owner
+            if result.rowcount == 0:
+                got = (
+                    await conn.execute(
+                        select(_LockRow).where(_LockRow.resource_key == resource_key)
+                    )
+                ).first()
+                if got is not None and got.owner_tx == owner_tx:
+                    return LockRecord(
+                        resource_key=got.resource_key,
+                        version=got.version,
+                        owner_tx=got.owner_tx,
+                        held_since=got.held_since,
+                        expires_at=got.expires_at,
+                    )
+                return None
+
+        return LockRecord(
+            resource_key=resource_key,
+            version=0,
+            owner_tx=owner_tx,
+            held_since=now,
+            expires_at=expires_at,
+        )
+
+    async def compare_and_swap(
+        self, resource_key: str, expected_version: int, owner_tx: str
+    ) -> bool:
+        assert self._engine is not None
+        from sqlalchemy import update
+
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                update(_LockRow)
+                .where(
+                    (_LockRow.resource_key == resource_key)
+                    & (_LockRow.owner_tx == owner_tx)
+                    & (_LockRow.version == expected_version)
+                )
+                .values(version=expected_version + 1)
+            )
+            return result.rowcount > 0
+
+    async def release_lock(self, resource_key: str, owner_tx: str) -> bool:
+        assert self._engine is not None
+        from sqlalchemy import delete
+
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                delete(_LockRow).where(
+                    (_LockRow.resource_key == resource_key)
+                    & (_LockRow.owner_tx == owner_tx)
+                )
+            )
+            return result.rowcount > 0
+
+    async def read_version(self, resource_key: str) -> Optional[int]:
+        assert self._engine is not None
+        async with self._engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    select(_LockRow).where(_LockRow.resource_key == resource_key)
+                )
+            ).first()
+            if not row:
+                return None
+            return row.version
+
+    # ---------------- 幂等（M1） ----------------
+
+    async def put_idempotency(self, record: IdempotencyRecord) -> None:
+        assert self._engine is not None
+        from sqlalchemy import delete
+
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                delete(_IdempotencyRow).where(
+                    _IdempotencyRow.idempotency_key == record.idempotency_key
+                )
+            )
+            await conn.execute(
+                insert(_IdempotencyRow).values(
+                    idempotency_key=record.idempotency_key,
+                    request_hash=record.request_hash,
+                    tx_id=record.tx_id,
+                    status=record.status,
+                    result_json=dumps_json(record.result) if record.result else None,
+                    created_at=record.created_at,
+                    expires_at=record.expires_at,
+                )
+            )
+
+    async def get_idempotency(self, key: str) -> Optional[IdempotencyRecord]:
+        assert self._engine is not None
+        async with self._engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    select(_IdempotencyRow).where(
+                        _IdempotencyRow.idempotency_key == key
+                    )
+                )
+            ).first()
+            if not row:
+                return None
+            # 已过期视为不存在
+            if row.expires_at is not None and row.expires_at < datetime.now():
+                return None
+            return IdempotencyRecord(
+                idempotency_key=row.idempotency_key,
+                request_hash=row.request_hash,
+                tx_id=row.tx_id,
+                status=row.status,
+                result=loads_json(row.result_json) if row.result_json else None,
+                created_at=row.created_at,
+                expires_at=row.expires_at,
+            )
+
+    async def delete_expired_idempotency(self) -> int:
+        assert self._engine is not None
+        from sqlalchemy import delete
+
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                delete(_IdempotencyRow).where(
+                    _IdempotencyRow.expires_at < datetime.now()
+                )
+            )
+            return result.rowcount
+
+    # ---------------- DLQ（M1） ----------------
+
+    async def enqueue_dlq(self, entry: DLQEntry) -> None:
+        assert self._engine is not None
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                insert(_DLQRow).values(
+                    tx_id=entry.tx_id,
+                    action_name=entry.action_name,
+                    error=entry.error,
+                    attempts=entry.attempts,
+                    status=entry.status,
+                    created_at=entry.created_at,
+                    resolved_at=entry.resolved_at,
+                )
+            )
+
+    async def list_dlq(
+        self, limit: int = 100, status: str = "open"
+    ) -> List[DLQEntry]:
+        assert self._engine is not None
+        async with self._engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    select(_DLQRow)
+                    .where(_DLQRow.status == status)
+                    .order_by(_DLQRow.created_at.asc())
+                    .limit(limit)
+                )
+            ).all()
+            return [
+                DLQEntry(
+                    tx_id=r.tx_id,
+                    action_name=r.action_name,
+                    error=r.error,
+                    attempts=r.attempts,
+                    status=r.status,
+                    created_at=r.created_at,
+                    resolved_at=r.resolved_at,
+                )
+                for r in rows
+            ]

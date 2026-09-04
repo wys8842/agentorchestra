@@ -15,10 +15,12 @@ class WALActionType(str, Enum):
     """WAL 动作类型。
 
     - CHECKPOINT: 写入一个新 checkpoint（同时存 checkpoints 表与 WAL）
-    - STATE_UPDATE: 状态增量变化（ObjectStore 写操作）
+    - STATE_UPDATE: 状态增量变化（ObjectStore 写操作 / 事务动作日志）
     - INTERRUPT: 触发 HITL 中断
     - RESUME: resume 中断（含 response）
     - SNAPSHOT: 写入周期快照（标记压缩点）
+    - TX_BEGIN: 事务开始标记（M1 事务引擎）
+    - TX_COMMIT: 事务提交标记（M1 事务引擎）
     """
 
     CHECKPOINT = "checkpoint"
@@ -26,6 +28,8 @@ class WALActionType(str, Enum):
     INTERRUPT = "interrupt"
     RESUME = "resume"
     SNAPSHOT = "snapshot"
+    TX_BEGIN = "tx_begin"
+    TX_COMMIT = "tx_commit"
 
 
 @dataclass

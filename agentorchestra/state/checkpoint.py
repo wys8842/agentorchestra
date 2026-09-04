@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from .interrupt import Interrupt
+    from .records import DLQEntry, IdempotencyRecord, LockRecord
     from .snapshot import Snapshot
     from .wal import WALEntry
 
@@ -153,6 +154,54 @@ class CheckpointStore(ABC):
     @abstractmethod
     async def get_interrupt(self, token: str) -> Optional["Interrupt"]:
         """获取中断。"""
+
+    # ---------------- 锁（M1 事务引擎） ----------------
+
+    @abstractmethod
+    async def acquire_lock(
+        self, resource_key: str, owner_tx: str, ttl_seconds: float = 30.0
+    ) -> Optional[LockRecord]:
+        """尝试获取锁。成功返回 LockRecord；已存在（未过期）返回 None。"""
+
+    @abstractmethod
+    async def compare_and_swap(
+        self, resource_key: str, expected_version: int, owner_tx: str
+    ) -> bool:
+        """CAS：版本等于 expected_version 才更新为 +1。成功 True；冲突 False。"""
+
+    @abstractmethod
+    async def release_lock(self, resource_key: str, owner_tx: str) -> bool:
+        """释放锁（仅 owner 可释放）。"""
+
+    @abstractmethod
+    async def read_version(self, resource_key: str) -> Optional[int]:
+        """读取资源当前版本；无锁记录返回 None。"""
+
+    # ---------------- 幂等（M1 事务引擎） ----------------
+
+    @abstractmethod
+    async def put_idempotency(self, record: IdempotencyRecord) -> None:
+        """写入/更新幂等记录（同 key 覆盖）。"""
+
+    @abstractmethod
+    async def get_idempotency(self, key: str) -> Optional[IdempotencyRecord]:
+        """读取幂等记录；不存在或已过期返回 None。"""
+
+    @abstractmethod
+    async def delete_expired_idempotency(self) -> int:
+        """清理过期幂等记录，返回删除条数。"""
+
+    # ---------------- DLQ（M1 事务引擎） ----------------
+
+    @abstractmethod
+    async def enqueue_dlq(self, entry: DLQEntry) -> None:
+        """入死信队列。"""
+
+    @abstractmethod
+    async def list_dlq(
+        self, limit: int = 100, status: str = "open"
+    ) -> List[DLQEntry]:
+        """列出死信条目（默认 open）。"""
 
     # ---------------- 便捷 ----------------
 

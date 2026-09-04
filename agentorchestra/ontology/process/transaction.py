@@ -1,10 +1,10 @@
 """TransactionManager - 事务管理器（动作原子性/补偿）
 
-保证一组动作要么全部成功，要么通过补偿动作回滚：
-- 记录每个动作的补偿动作（undo）
-- 动作失败时，逆序执行已成功动作的补偿
-- 支持保存点（savepoint）部分提交
-- 提供事务日志
+M1（P1）后：支持两种执行引擎：
+- 默认：纯 saga（内存），向后兼容旧 API 行为（无 DB 依赖）
+- coordinator 模式：委托给 `agentorchestra.tx.TransactionCoordinator`（幂等 + WAL + 补偿 + DLQ）
+
+设计见 docs/superpowers/specs/2026-09-03-m1-transaction-runtime-design.md §7
 
 补偿模式（Saga）：
   动作A(成功) → 动作B(成功) → 动作C(失败)
@@ -35,9 +35,12 @@ class CompensatingAction:
 class TransactionManager:
     """事务管理器"""
 
-    def __init__(self):
+    def __init__(self, coordinator: Optional[Any] = None):
         self._actions: Dict[str, CompensatingAction] = {}
         self._tx_log: List[Dict[str, Any]] = []
+        self.coordinator = coordinator  # Optional TransactionCoordinator（M1）
+
+    # ==================== 注册 ====================
 
     def register_action(self, action: CompensatingAction) -> None:
         """注册可补偿动作"""
@@ -53,25 +56,114 @@ class TransactionManager:
     def get_action(self, name: str) -> Optional[CompensatingAction]:
         return self._actions.get(name)
 
+    def set_coordinator(self, coordinator: Any) -> None:
+        """启用 coordinator 引擎（M1）。
+
+        之后 execute() 委托给 coordinator（幂等 + WAL + 补偿 + DLQ）。
+        """
+        self.coordinator = coordinator
+        # 把已注册动作同步到 coordinator
+        for name, action in self._actions.items():
+            self._sync_action_to_coordinator(name, action)
+
+    def _sync_action_to_coordinator(self, name: str, action: CompensatingAction) -> None:
+        if self.coordinator is None:
+            return
+        self.coordinator.register_action(
+            name,
+            execute_fn=lambda p, _tx, _a=action: _a.action_fn(p, {}),
+            compensate_fn=(
+                (lambda p, _tx, _a=action: _a.compensate_fn(p, {}))
+                if action.compensate_fn is not None
+                else None
+            ),
+        )
+
     # ==================== 事务执行 ====================
 
     def execute(self, steps: List[Dict[str, Any]],
                 ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """执行事务（Saga 补偿）
 
+        - 若启用了 coordinator：委托给新运行时（sync 桥接）。
+        - 否则：旧纯内存 saga 逻辑（默认，向后兼容）。
+
         Args:
             steps: [{"action": "扣库存", "params": {...}}, ...]
-                按顺序执行；任一失败则逆序补偿已成功的
             ctx: 执行上下文
 
         Returns:
             {"success", "completed": [动作名], "failed": 失败动作,
              "compensated": [已补偿动作名], "errors"}
         """
+        if self.coordinator is not None:
+            from agentorchestra.tx.sync import run_sync
+            return run_sync(lambda: self._execute_via_coordinator(steps))
+
+        return self._execute_saga(steps, ctx)
+
+    # ---- coordinator 引擎路径 ----
+
+    async def _execute_via_coordinator(self,
+                                       steps: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """委托 coordinator（async 核心）。返回与旧 execute 相同的 dict。"""
+        assert self.coordinator is not None
+        # 确保 coordinator 已注册当前动作集
+        for name, action in self._actions.items():
+            if self.coordinator.get_action(name) is None:
+                self._sync_action_to_coordinator(name, action)
+
+        # 校验动作是否都注册
+        unregistered = [
+            s.get("action") for s in steps
+            if self.coordinator.get_action(s.get("action")) is None
+        ]
+        if unregistered:
+            # 无成功动作，无需补偿；直接返回失败（与旧语义一致）
+            return {
+                "success": False,
+                "completed": [],
+                "failed": unregistered[0],
+                "compensated": [],
+                "errors": [f"动作未注册: {unregistered[0]}"],
+                "engine": "coordinator",
+            }
+
+        result: Dict[str, Any] = {
+            "success": False,
+            "completed": [],
+            "failed": None,
+            "compensated": [],
+            "errors": [],
+            "engine": "coordinator",
+        }
+        tx = None
+        try:
+            async with self.coordinator.transaction() as tx:
+                for step in steps:
+                    await tx.execute(step.get("action"), step.get("params", {}))
+                result["success"] = True
+                result["completed"] = list(tx.completed)
+                result["errors"] = []
+                return result
+        except Exception as e:
+            # 事务失败，coordinator 已自动逆序补偿。
+            # tx.completed = 曾成功（现被补偿）的动作
+            result["success"] = False
+            result["failed"] = getattr(e, "name", None) or type(e).__name__
+            result["compensated"] = list(tx.completed) if tx is not None else []
+            result["errors"].append(f"事务失败: {e}")
+            return result
+
+    # ---- 旧 saga 引擎路径（默认） ----
+
+    def _execute_saga(self, steps: List[Dict[str, Any]],
+                      ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """旧版纯内存 Saga（向后兼容）。"""
         ctx = ctx or {}
         completed: List[str] = []
-        completed_params: Dict[str, Dict] = {}  # 动作名 -> 原参数（供补偿）
-        tx_record = {
+        completed_params: Dict[str, Dict] = {}
+        tx_record: Dict[str, Any] = {
             "started_at": datetime.now().isoformat(),
             "steps": [s.get("action") for s in steps],
             "completed": [],
@@ -83,22 +175,25 @@ class TransactionManager:
         # ① 正序执行
         for step in steps:
             action_name = step.get("action")
-            action = self._actions.get(action_name)  # type: ignore[arg-type]
+            if not isinstance(action_name, str):
+                tx_record["failed"] = action_name
+                tx_record["errors"].append(f"动作名无效: {action_name}")
+                break
+            action = self._actions.get(action_name)
             if not action:
-                # 未注册动作视为失败：触发已成功动作的补偿
-                tx_record["failed"] = action_name  # type: ignore[assignment]
-                tx_record["errors"].append(f"动作未注册: {action_name}")  # type: ignore[union-attr]
+                tx_record["failed"] = action_name
+                tx_record["errors"].append(f"动作未注册: {action_name}")
                 break
 
             step_params = step.get("params", {})
             try:
                 action.action_fn(step_params, ctx)
-                completed.append(action_name)  # type: ignore[arg-type]
-                completed_params[action_name] = step_params  # type: ignore[index]
-                tx_record["completed"].append(action_name)  # type: ignore[union-attr]
+                completed.append(action_name)
+                completed_params[action_name] = step_params
+                tx_record["completed"].append(action_name)
             except Exception as e:
-                tx_record["failed"] = action_name  # type: ignore[assignment]
-                tx_record["errors"].append(f"动作 '{action_name}' 失败: {e}")  # type: ignore[union-attr]
+                tx_record["failed"] = action_name
+                tx_record["errors"].append(f"动作 '{action_name}' 失败: {e}")
                 break
 
         # ② 若失败，逆序补偿
@@ -108,13 +203,13 @@ class TransactionManager:
                 if action and action.compensate_fn:
                     try:
                         action.compensate_fn(completed_params.get(name, {}), ctx)
-                        tx_record["compensated"].append(name)  # type: ignore[union-attr]
+                        tx_record["compensated"].append(name)
                     except Exception as e:
-                        tx_record["errors"].append(f"补偿 '{name}' 失败: {e}")  # type: ignore[union-attr]
+                        tx_record["errors"].append(f"补偿 '{name}' 失败: {e}")
                 elif action and not action.compensate_fn:
-                    tx_record["errors"].append(f"动作 '{name}' 无补偿，无法回滚")  # type: ignore[union-attr]
+                    tx_record["errors"].append(f"动作 '{name}' 无补偿，无法回滚")
 
-        tx_record["success"] = not tx_record["failed"]  # type: ignore[assignment]
+        tx_record["success"] = not tx_record["failed"]
         tx_record["ended_at"] = datetime.now().isoformat()
         self._tx_log.append(tx_record)
         return tx_record

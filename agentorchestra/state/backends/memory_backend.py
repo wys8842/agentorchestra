@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from ..checkpoint import Checkpoint, CheckpointStore
 from ..interrupt import Interrupt, InterruptStatus
+from ..records import DLQEntry, IdempotencyRecord, LockRecord
 from ..snapshot import Snapshot
 from ..thread import ThreadStatus
 from ..wal import WALEntry
@@ -34,6 +35,9 @@ class InMemoryCheckpointStore(CheckpointStore):
         self._wal: Dict[str, List[WALEntry]] = {}
         self._snapshots: Dict[str, List[Snapshot]] = {}
         self._interrupts: Dict[str, Interrupt] = {}
+        self._locks: Dict[str, LockRecord] = {}
+        self._idempotency: Dict[str, IdempotencyRecord] = {}
+        self._dlq: List[DLQEntry] = []
 
     async def init(self) -> None:
         return None
@@ -154,3 +158,94 @@ class InMemoryCheckpointStore(CheckpointStore):
     async def get_interrupt(self, token: str) -> Optional[Interrupt]:
         with self._lock:
             return self._interrupts.get(token)
+
+    # ---------------- 锁（M1） ----------------
+
+    async def acquire_lock(
+        self, resource_key: str, owner_tx: str, ttl_seconds: float = 30.0
+    ) -> Optional[LockRecord]:
+        now = datetime.now()
+        with self._lock:
+            existing = self._locks.get(resource_key)
+            if existing is not None:
+                exp = existing.expires_at
+                if exp is None or exp > now:
+                    return None
+                # 过期：抢占
+                del self._locks[resource_key]
+            record = LockRecord(
+                resource_key=resource_key,
+                version=0,
+                owner_tx=owner_tx,
+                held_since=now,
+                expires_at=(
+                    now + timedelta(seconds=ttl_seconds) if ttl_seconds else None
+                ),
+            )
+            self._locks[resource_key] = record
+            return record
+
+    async def compare_and_swap(
+        self, resource_key: str, expected_version: int, owner_tx: str
+    ) -> bool:
+        with self._lock:
+            existing = self._locks.get(resource_key)
+            if existing is None or existing.owner_tx != owner_tx:
+                return False
+            if existing.version != expected_version:
+                return False
+            existing.version = expected_version + 1
+            return True
+
+    async def release_lock(self, resource_key: str, owner_tx: str) -> bool:
+        with self._lock:
+            existing = self._locks.get(resource_key)
+            if existing is None or existing.owner_tx != owner_tx:
+                return False
+            del self._locks[resource_key]
+            return True
+
+    async def read_version(self, resource_key: str) -> Optional[int]:
+        with self._lock:
+            existing = self._locks.get(resource_key)
+            return existing.version if existing else None
+
+    # ---------------- 幂等（M1） ----------------
+
+    async def put_idempotency(self, record: IdempotencyRecord) -> None:
+        with self._lock:
+            self._idempotency[record.idempotency_key] = record
+
+    async def get_idempotency(self, key: str) -> Optional[IdempotencyRecord]:
+        with self._lock:
+            record = self._idempotency.get(key)
+            if record is None:
+                return None
+            if record.expires_at is not None and record.expires_at < datetime.now():
+                return None
+            return record
+
+    async def delete_expired_idempotency(self) -> int:
+        now = datetime.now()
+        with self._lock:
+            expired = [
+                k for k, v in self._idempotency.items()
+                if v.expires_at is not None and v.expires_at < now
+            ]
+            for k in expired:
+                del self._idempotency[k]
+            return len(expired)
+
+    # ---------------- DLQ（M1） ----------------
+
+    async def enqueue_dlq(self, entry: DLQEntry) -> None:
+        with self._lock:
+            self._dlq.append(entry)
+
+    async def list_dlq(
+        self, limit: int = 100, status: str = "open"
+    ) -> List[DLQEntry]:
+        with self._lock:
+            return [
+                e for e in self._dlq if e.status == status
+            ][:limit]
